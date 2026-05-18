@@ -6,7 +6,7 @@ from pathlib import Path
 from tkinter import messagebox
 
 
-APP_VERSION = "v0.9"
+APP_VERSION = "v1.0"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
