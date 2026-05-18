@@ -1,11 +1,12 @@
 import json
 import random
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox
 
 
-APP_VERSION = "v0.5"
+APP_VERSION = "v0.9"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -43,6 +44,11 @@ DEFAULT_PROFILE = {
 }
 
 
+def now_text():
+    """現在時刻を YYYY-MM-DD HH:MM 形式で返す"""
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
 def load_profile_from_file():
     """character_profile.json からキャラ設定を読み込む"""
     if not PROFILE_FILE.exists():
@@ -70,6 +76,7 @@ def normalize_message(raw_message):
 
     role = str(raw_message.get("role", "")).strip()
     message = str(raw_message.get("message", "")).strip()
+    timestamp = str(raw_message.get("timestamp", "")).strip()
 
     if role not in ["user", "character"]:
         return None
@@ -80,6 +87,7 @@ def normalize_message(raw_message):
     return {
         "role": role,
         "message": message,
+        "timestamp": timestamp,
     }
 
 
@@ -115,28 +123,55 @@ def save_chat_history():
     )
 
 
-def append_chat_text(speaker, message):
-    """チャット欄に1件分の発言を追加する"""
-    chat_text.config(state="normal")
-    chat_text.insert(tk.END, f"{speaker}\n")
-    chat_text.insert(tk.END, f"{message}\n\n")
-    chat_text.see(tk.END)
-    chat_text.config(state="disabled")
+def get_speaker_name(role):
+    """roleに応じた表示名を返す"""
+    if role == "user":
+        return profile["user_call"]
+
+    return profile["character_name"]
+
+
+def message_matches_search(item, keyword):
+    """会話履歴が検索キーワードに一致するか判定する"""
+    if not keyword:
+        return True
+
+    keyword = keyword.lower()
+    speaker = get_speaker_name(item["role"]).lower()
+    message = item["message"].lower()
+    timestamp = item.get("timestamp", "").lower()
+
+    return keyword in speaker or keyword in message or keyword in timestamp
 
 
 def refresh_chat_display():
     """会話履歴を画面に表示し直す"""
     chat_text.config(state="normal")
     chat_text.delete("1.0", tk.END)
-    chat_text.config(state="disabled")
+
+    keyword = search_var.get().strip()
+
+    visible_count = 0
 
     for item in chat_history:
-        if item["role"] == "user":
-            speaker = profile["user_call"]
-        else:
-            speaker = profile["character_name"]
+        if not message_matches_search(item, keyword):
+            continue
 
-        append_chat_text(speaker, item["message"])
+        speaker = get_speaker_name(item["role"])
+        timestamp = item.get("timestamp", "")
+
+        if timestamp:
+            chat_text.insert(tk.END, f"{speaker} ({timestamp})\n")
+        else:
+            chat_text.insert(tk.END, f"{speaker}\n")
+
+        chat_text.insert(tk.END, f"{item['message']}\n\n")
+        visible_count += 1
+
+    chat_text.see(tk.END)
+    chat_text.config(state="disabled")
+
+    update_count_label(visible_count)
 
 
 def add_message(role, message):
@@ -145,17 +180,12 @@ def add_message(role, message):
         {
             "role": role,
             "message": message,
+            "timestamp": now_text(),
         }
     )
 
-    if role == "user":
-        speaker = profile["user_call"]
-    else:
-        speaker = profile["character_name"]
-
-    append_chat_text(speaker, message)
     save_chat_history()
-    update_count_label()
+    refresh_chat_display()
 
 
 def contains_any(text, keywords):
@@ -166,45 +196,79 @@ def contains_any(text, keywords):
 def generate_character_reply(user_message):
     """ユーザーの入力に対して、ルールベースでキャラ返答を作る"""
     message = user_message.lower()
+
+    name = profile["character_name"]
     user_call = profile["user_call"]
     first_person = profile["first_person"]
 
-    if contains_any(message, ["疲れ", "つかれ", "しんど", "だるい"]):
+    if contains_any(message, ["おはよう", "こんにちは", "こんばんは", "やっほ", "ただいま"]):
+        return (
+            f"{user_call}、来てくれてうれしい。\n"
+            f"今日は何から一緒に進めよっか。まず今の気分だけ教えてくれてもいいよ。"
+        )
+
+    if contains_any(message, ["疲れ", "つかれ", "しんど", "だるい", "消耗"]):
         return (
             f"{user_call}、おつかれさま。そこまで頑張ってたなら、"
             f"いったん止まっていいと思う。\n"
             f"{first_person}なら、まず水を飲んで、5分だけ休むところからにするかな。"
         )
 
-    if contains_any(message, ["不安", "こわ", "怖", "心配", "むり", "無理"]):
+    if contains_any(message, ["不安", "こわ", "怖", "心配", "むり", "無理", "焦る", "焦って"]):
         return (
             f"うん、不安になるのは自然だよ。雑に「大丈夫」って流したくはないかな。\n"
             f"まずは何が一番引っかかってるか、1個だけ書き出そ。"
             f"そこから一緒にほどいていこ。"
         )
 
-    if contains_any(message, ["勉強", "研究", "開発", "python", "git", "github", "アプリ"]):
+    if contains_any(message, ["勉強", "研究", "開発", "python", "git", "github", "アプリ", "実装"]):
         return (
             f"いいね、{user_call}。そこは今の積み上げとちゃんとつながってると思う。\n"
             f"一気に完璧にしようとしなくていいから、まず次の小さい一手だけ決めよ。"
         )
 
-    if contains_any(message, ["眠", "ねむ", "寝", "夜更かし"]):
+    if contains_any(message, ["英語", "英会話", "toeic", "発音", "スピーキング"]):
+        return (
+            f"英語は、完璧に話そうとすると止まりやすいかも。\n"
+            f"今日は短い文を1つだけ声に出す、くらいでいいと思う。"
+            f"{user_call}なら、そこからちゃんと積めるよ。"
+        )
+
+    if contains_any(message, ["眠", "ねむ", "寝", "夜更かし", "徹夜"]):
         return (
             f"{user_call}、眠いなら無理に押し切らない方がいいかも。\n"
             f"今日は最低限だけメモして、明日の自分に渡すのもちゃんと前進だよ。"
         )
 
-    if contains_any(message, ["ありがとう", "ありがと", "助かった"]):
+    if contains_any(message, ["ありがとう", "ありがと", "助かった", "感謝"]):
         return (
             f"うん、どういたしまして。そう言ってもらえると、{first_person}もうれしい。\n"
             f"でも、ちゃんと進めたのは{user_call}自身の力だよ。"
         )
 
-    if contains_any(message, ["やった", "できた", "完成", "成功"]):
+    if contains_any(message, ["やった", "できた", "完成", "成功", "終わった", "いけた"]):
         return (
             f"やったね、{user_call}。それはちゃんと喜んでいいやつ。\n"
             f"今のうちに、何ができるようになったか一言だけ残しておこ。あとで自信になるよ。"
+        )
+
+    if contains_any(message, ["ワクワク", "楽しい", "楽しみ", "好き", "推し", "趣味"]):
+        return (
+            f"それ、すごく大事だと思う。ワクワクするものを作る方が、たぶん長く続くよ。\n"
+            f"ただ、広げすぎると大変だから、まずは小さい原型にしよ。"
+        )
+
+    if contains_any(message, ["迷", "どうしよう", "どっち", "悩", "決められ"]):
+        return (
+            f"迷ってるなら、いきなり正解を選ぼうとしなくていいと思う。\n"
+            f"選択肢を2つに絞って、今日の目的に近い方を選ぼ。"
+            f"{first_person}も一緒に整理するから。"
+        )
+
+    if contains_any(message, ["お金", "食費", "節約", "出費", "家計"]):
+        return (
+            f"お金まわりは、気合いより見える化が効くと思う。\n"
+            f"まず今日の出費だけ記録しよ。責めるためじゃなくて、調整するために見る感じで。"
         )
 
     default_replies = [
@@ -219,6 +283,10 @@ def generate_character_reply(user_message):
         (
             f"{first_person}は、そこは少しずつ形にしていけばいいと思う。\n"
             f"次にやるなら、小さく試せる形にするのがよさそう。"
+        ),
+        (
+            f"それ、ちゃんと考える価値あると思う。\n"
+            f"今すぐ完璧にまとめなくていいから、まず一文だけメモしておこ。"
         ),
     ]
 
@@ -235,6 +303,9 @@ def send_message(event=None):
 
     input_var.set("")
 
+    # 検索中だと送信した会話が見えにくいので、送信時は検索を解除する
+    search_var.set("")
+
     add_message("user", user_message)
 
     reply = generate_character_reply(user_message)
@@ -243,10 +314,42 @@ def send_message(event=None):
     set_status("メッセージを送信しました。")
 
 
+def add_starter_message():
+    """キャラ側から会話のきっかけを出す"""
+    starters = [
+        f"{profile['user_call']}、今日は何から進めよっか。小さい一歩で大丈夫だよ。",
+        f"今の気分を一言で言うならどんな感じ？そこから一緒に整理しよ。",
+        f"作りたいものの話、少ししよ。ワクワクする方向から決めてもいいと思う。",
+        f"今日は頑張る日？整える日？どっちでも、ちゃんと意味はあるよ。",
+    ]
+
+    search_var.set("")
+    add_message("character", random.choice(starters))
+    set_status("キャラから話しかけました。")
+
+
 def clear_input():
     """入力欄をクリアする"""
     input_var.set("")
     set_status("入力欄をクリアしました。")
+
+
+def search_history():
+    """会話履歴を検索する"""
+    refresh_chat_display()
+
+    keyword = search_var.get().strip()
+    if keyword:
+        set_status(f"会話履歴を検索しました: {keyword}")
+    else:
+        set_status("検索欄が空なので、全件表示しています。")
+
+
+def clear_search():
+    """検索をクリアする"""
+    search_var.set("")
+    refresh_chat_display()
+    set_status("検索をクリアしました。")
 
 
 def clear_history():
@@ -267,7 +370,6 @@ def clear_history():
     chat_history.clear()
     save_chat_history()
     refresh_chat_display()
-    update_count_label()
 
     set_status("会話履歴を削除しました。")
 
@@ -303,9 +405,12 @@ def update_profile_display():
     personality_preview_text.config(state="disabled")
 
 
-def update_count_label():
+def update_count_label(visible_count=None):
     """会話件数を更新する"""
-    count_var.set(f"会話履歴: {len(chat_history)}件")
+    if visible_count is None:
+        visible_count = len(chat_history)
+
+    count_var.set(f"表示: {visible_count}件 / 履歴: {len(chat_history)}件")
 
 
 def set_status(message):
@@ -321,11 +426,12 @@ chat_history = load_chat_history()
 # アプリのメインウィンドウ
 root = tk.Tk()
 root.title(APP_TITLE)
-root.geometry("980x700")
+root.geometry("1020x740")
 root.configure(bg=BG_COLOR)
 
 # 変数
 input_var = tk.StringVar()
+search_var = tk.StringVar()
 status_var = tk.StringVar(value="準備完了")
 profile_summary_var = tk.StringVar()
 count_var = tk.StringVar()
@@ -379,6 +485,34 @@ count_label = tk.Label(
 )
 count_label.pack(side="right")
 
+search_frame = tk.Frame(chat_frame, bg=PANEL_COLOR)
+search_frame.pack(fill="x", pady=(0, 8))
+
+search_entry = tk.Entry(
+    search_frame,
+    textvariable=search_var,
+    font=("Meiryo", 10),
+)
+search_entry.pack(side="left", expand=True, fill="x", padx=(0, 8))
+
+search_button = tk.Button(
+    search_frame,
+    text="履歴検索",
+    font=("Meiryo", 9),
+    command=search_history,
+    width=10,
+)
+search_button.pack(side="left", padx=4)
+
+clear_search_button = tk.Button(
+    search_frame,
+    text="検索クリア",
+    font=("Meiryo", 9),
+    command=clear_search,
+    width=10,
+)
+clear_search_button.pack(side="left", padx=4)
+
 chat_text = tk.Text(
     chat_frame,
     font=("Meiryo", 10),
@@ -417,6 +551,15 @@ clear_input_button = tk.Button(
 )
 clear_input_button.pack(side="left", padx=4)
 
+starter_button = tk.Button(
+    chat_frame,
+    text="キャラから話しかける",
+    font=("Meiryo", 10),
+    command=add_starter_message,
+    width=20,
+)
+starter_button.pack(anchor="w", pady=(10, 0))
+
 # 右側：キャラ情報
 profile_frame = tk.Frame(main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
 profile_frame.pack(side="left", fill="y", ipadx=12, ipady=12)
@@ -435,7 +578,7 @@ profile_summary_label = tk.Label(
     font=("Meiryo", 10),
     bg=PANEL_COLOR,
     justify="left",
-    wraplength=260,
+    wraplength=270,
 )
 profile_summary_label.pack(anchor="w", pady=(0, 10))
 
@@ -443,7 +586,7 @@ personality_preview_text = tk.Text(
     profile_frame,
     font=("Meiryo", 9),
     wrap="word",
-    width=34,
+    width=35,
     height=18,
     bd=1,
     relief="solid",
@@ -472,14 +615,15 @@ clear_history_button.pack(pady=(0, 8))
 hint_label = tk.Label(
     profile_frame,
     text=(
-        "v0.5ではAPIなしのルールベース返答です。\n"
+        "v0.9ではAPIなしのルールベース返答です。\n"
+        "返答ルールを増やし、履歴検索と会話スターターを追加しました。\n"
         "次以降でLLM連携や音声読み上げに拡張できます。"
     ),
     font=("Meiryo", 8),
     bg=PANEL_COLOR,
     fg="#666666",
     justify="left",
-    wraplength=260,
+    wraplength=270,
 )
 hint_label.pack(anchor="w", pady=(8, 0))
 
@@ -495,12 +639,12 @@ status_label.pack(fill="x", padx=18, pady=(0, 8))
 
 # ショートカット
 input_entry.bind("<Return>", send_message)
+search_entry.bind("<Return>", lambda event: search_history())
 input_entry.focus_set()
 
 # 初期表示
 update_profile_display()
 refresh_chat_display()
-update_count_label()
 set_status(f"{profile['character_name']} の設定を読み込みました。")
 
 # アプリ起動
