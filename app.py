@@ -6,11 +6,12 @@ from pathlib import Path
 from tkinter import messagebox
 
 
-APP_VERSION = "v1.0"
+APP_VERSION = "v1.1"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
 HISTORY_FILE = Path("chat_history.json")
+RULES_FILE = Path("reply_rules.json")
 
 BG_COLOR = "#f4f4f4"
 PANEL_COLOR = "#ffffff"
@@ -44,20 +45,45 @@ DEFAULT_PROFILE = {
 }
 
 
+DEFAULT_REPLY_RULES = {
+    "rules": [
+        {
+            "name": "tired",
+            "keywords": ["疲れ", "つかれ", "しんど", "だるい"],
+            "replies": [
+                "{user_call}、おつかれさま。まず水を飲んで、5分だけ休も。"
+            ],
+        }
+    ],
+    "default_replies": [
+        "うん、聞いてるよ。もう少しだけ言葉にしてくれたら一緒に整理できると思う。"
+    ],
+}
+
+
 def now_text():
     """現在時刻を YYYY-MM-DD HH:MM 形式で返す"""
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
-def load_profile_from_file():
-    """character_profile.json からキャラ設定を読み込む"""
-    if not PROFILE_FILE.exists():
-        return DEFAULT_PROFILE.copy()
+def load_json_file(path, default_value):
+    """JSONファイルを読み込む。失敗したらdefault_valueを返す"""
+    if not path.exists():
+        return default_value
 
     try:
-        data = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return DEFAULT_PROFILE.copy()
+        messagebox.showwarning(
+            "読み込みエラー",
+            f"{path.name} の形式が壊れていたため、初期設定で起動します。",
+        )
+        return default_value
+
+
+def load_profile_from_file():
+    """character_profile.json からキャラ設定を読み込む"""
+    data = load_json_file(PROFILE_FILE, DEFAULT_PROFILE.copy())
 
     profile = DEFAULT_PROFILE.copy()
 
@@ -67,6 +93,80 @@ def load_profile_from_file():
                 profile[key] = str(data[key])
 
     return profile
+
+
+def normalize_reply_rule(raw_rule):
+    """読み込んだ返答ルールを安全な形に整える"""
+    if not isinstance(raw_rule, dict):
+        return None
+
+    name = str(raw_rule.get("name", "unnamed")).strip()
+    keywords = raw_rule.get("keywords", [])
+    replies = raw_rule.get("replies", [])
+
+    if not isinstance(keywords, list) or not isinstance(replies, list):
+        return None
+
+    normalized_keywords = [
+        str(keyword).strip()
+        for keyword in keywords
+        if str(keyword).strip()
+    ]
+
+    normalized_replies = [
+        str(reply).strip()
+        for reply in replies
+        if str(reply).strip()
+    ]
+
+    if not normalized_keywords or not normalized_replies:
+        return None
+
+    return {
+        "name": name,
+        "keywords": normalized_keywords,
+        "replies": normalized_replies,
+    }
+
+
+def load_reply_rules_from_file():
+    """reply_rules.json から返答ルールを読み込む"""
+    data = load_json_file(RULES_FILE, DEFAULT_REPLY_RULES.copy())
+
+    if not isinstance(data, dict):
+        return DEFAULT_REPLY_RULES.copy()
+
+    raw_rules = data.get("rules", [])
+    raw_default_replies = data.get("default_replies", [])
+
+    rules = []
+
+    if isinstance(raw_rules, list):
+        for raw_rule in raw_rules:
+            rule = normalize_reply_rule(raw_rule)
+
+            if rule is not None:
+                rules.append(rule)
+
+    default_replies = []
+
+    if isinstance(raw_default_replies, list):
+        default_replies = [
+            str(reply).strip()
+            for reply in raw_default_replies
+            if str(reply).strip()
+        ]
+
+    if not rules:
+        rules = DEFAULT_REPLY_RULES["rules"]
+
+    if not default_replies:
+        default_replies = DEFAULT_REPLY_RULES["default_replies"]
+
+    return {
+        "rules": rules,
+        "default_replies": default_replies,
+    }
 
 
 def normalize_message(raw_message):
@@ -93,13 +193,7 @@ def normalize_message(raw_message):
 
 def load_chat_history():
     """chat_history.json から会話履歴を読み込む"""
-    if not HISTORY_FILE.exists():
-        return []
-
-    try:
-        data = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
+    data = load_json_file(HISTORY_FILE, [])
 
     if not isinstance(data, list):
         return []
@@ -150,7 +244,6 @@ def refresh_chat_display():
     chat_text.delete("1.0", tk.END)
 
     keyword = search_var.get().strip()
-
     visible_count = 0
 
     for item in chat_history:
@@ -193,104 +286,34 @@ def contains_any(text, keywords):
     return any(keyword in text for keyword in keywords)
 
 
+def format_reply_template(template):
+    """返答テンプレートにキャラ設定を差し込む"""
+    values = {
+        "character_name": profile["character_name"],
+        "first_person": profile["first_person"],
+        "user_call": profile["user_call"],
+        "relationship": profile["relationship"],
+    }
+
+    try:
+        return template.format(**values)
+    except KeyError:
+        return template
+
+
 def generate_character_reply(user_message):
-    """ユーザーの入力に対して、ルールベースでキャラ返答を作る"""
+    """ユーザー入力に対して、reply_rules.jsonのルールで返答を作る"""
     message = user_message.lower()
 
-    name = profile["character_name"]
-    user_call = profile["user_call"]
-    first_person = profile["first_person"]
+    for rule in reply_rules["rules"]:
+        keywords = rule["keywords"]
 
-    if contains_any(message, ["おはよう", "こんにちは", "こんばんは", "やっほ", "ただいま"]):
-        return (
-            f"{user_call}、来てくれてうれしい。\n"
-            f"今日は何から一緒に進めよっか。まず今の気分だけ教えてくれてもいいよ。"
-        )
+        if contains_any(message, keywords):
+            reply_template = random.choice(rule["replies"])
+            return format_reply_template(reply_template)
 
-    if contains_any(message, ["疲れ", "つかれ", "しんど", "だるい", "消耗"]):
-        return (
-            f"{user_call}、おつかれさま。そこまで頑張ってたなら、"
-            f"いったん止まっていいと思う。\n"
-            f"{first_person}なら、まず水を飲んで、5分だけ休むところからにするかな。"
-        )
-
-    if contains_any(message, ["不安", "こわ", "怖", "心配", "むり", "無理", "焦る", "焦って"]):
-        return (
-            f"うん、不安になるのは自然だよ。雑に「大丈夫」って流したくはないかな。\n"
-            f"まずは何が一番引っかかってるか、1個だけ書き出そ。"
-            f"そこから一緒にほどいていこ。"
-        )
-
-    if contains_any(message, ["勉強", "研究", "開発", "python", "git", "github", "アプリ", "実装"]):
-        return (
-            f"いいね、{user_call}。そこは今の積み上げとちゃんとつながってると思う。\n"
-            f"一気に完璧にしようとしなくていいから、まず次の小さい一手だけ決めよ。"
-        )
-
-    if contains_any(message, ["英語", "英会話", "toeic", "発音", "スピーキング"]):
-        return (
-            f"英語は、完璧に話そうとすると止まりやすいかも。\n"
-            f"今日は短い文を1つだけ声に出す、くらいでいいと思う。"
-            f"{user_call}なら、そこからちゃんと積めるよ。"
-        )
-
-    if contains_any(message, ["眠", "ねむ", "寝", "夜更かし", "徹夜"]):
-        return (
-            f"{user_call}、眠いなら無理に押し切らない方がいいかも。\n"
-            f"今日は最低限だけメモして、明日の自分に渡すのもちゃんと前進だよ。"
-        )
-
-    if contains_any(message, ["ありがとう", "ありがと", "助かった", "感謝"]):
-        return (
-            f"うん、どういたしまして。そう言ってもらえると、{first_person}もうれしい。\n"
-            f"でも、ちゃんと進めたのは{user_call}自身の力だよ。"
-        )
-
-    if contains_any(message, ["やった", "できた", "完成", "成功", "終わった", "いけた"]):
-        return (
-            f"やったね、{user_call}。それはちゃんと喜んでいいやつ。\n"
-            f"今のうちに、何ができるようになったか一言だけ残しておこ。あとで自信になるよ。"
-        )
-
-    if contains_any(message, ["ワクワク", "楽しい", "楽しみ", "好き", "推し", "趣味"]):
-        return (
-            f"それ、すごく大事だと思う。ワクワクするものを作る方が、たぶん長く続くよ。\n"
-            f"ただ、広げすぎると大変だから、まずは小さい原型にしよ。"
-        )
-
-    if contains_any(message, ["迷", "どうしよう", "どっち", "悩", "決められ"]):
-        return (
-            f"迷ってるなら、いきなり正解を選ぼうとしなくていいと思う。\n"
-            f"選択肢を2つに絞って、今日の目的に近い方を選ぼ。"
-            f"{first_person}も一緒に整理するから。"
-        )
-
-    if contains_any(message, ["お金", "食費", "節約", "出費", "家計"]):
-        return (
-            f"お金まわりは、気合いより見える化が効くと思う。\n"
-            f"まず今日の出費だけ記録しよ。責めるためじゃなくて、調整するために見る感じで。"
-        )
-
-    default_replies = [
-        (
-            f"うん、聞いてるよ。{user_call}が今考えてること、"
-            f"もう少しだけ言葉にしてくれたら一緒に整理できると思う。"
-        ),
-        (
-            f"なるほどね。すぐ結論を出さなくても大丈夫。\n"
-            f"まずは「今いちばん気になってること」を1つに絞ってみよ。"
-        ),
-        (
-            f"{first_person}は、そこは少しずつ形にしていけばいいと思う。\n"
-            f"次にやるなら、小さく試せる形にするのがよさそう。"
-        ),
-        (
-            f"それ、ちゃんと考える価値あると思う。\n"
-            f"今すぐ完璧にまとめなくていいから、まず一文だけメモしておこ。"
-        ),
-    ]
-
-    return random.choice(default_replies)
+    default_template = random.choice(reply_rules["default_replies"])
+    return format_reply_template(default_template)
 
 
 def send_message(event=None):
@@ -302,8 +325,6 @@ def send_message(event=None):
         return
 
     input_var.set("")
-
-    # 検索中だと送信した会話が見えにくいので、送信時は検索を解除する
     search_var.set("")
 
     add_message("user", user_message)
@@ -317,14 +338,15 @@ def send_message(event=None):
 def add_starter_message():
     """キャラ側から会話のきっかけを出す"""
     starters = [
-        f"{profile['user_call']}、今日は何から進めよっか。小さい一歩で大丈夫だよ。",
-        f"今の気分を一言で言うならどんな感じ？そこから一緒に整理しよ。",
-        f"作りたいものの話、少ししよ。ワクワクする方向から決めてもいいと思う。",
-        f"今日は頑張る日？整える日？どっちでも、ちゃんと意味はあるよ。",
+        "{user_call}、今日は何から進めよっか。小さい一歩で大丈夫だよ。",
+        "今の気分を一言で言うならどんな感じ？そこから一緒に整理しよ。",
+        "作りたいものの話、少ししよ。ワクワクする方向から決めてもいいと思う。",
+        "今日は頑張る日？整える日？どっちでも、ちゃんと意味はあるよ。",
     ]
 
     search_var.set("")
-    add_message("character", random.choice(starters))
+    message = format_reply_template(random.choice(starters))
+    add_message("character", message)
     set_status("キャラから話しかけました。")
 
 
@@ -385,6 +407,15 @@ def reload_profile():
     set_status("キャラ設定を再読み込みしました。")
 
 
+def reload_reply_rules():
+    """返答ルールを再読み込みする"""
+    global reply_rules
+
+    reply_rules = load_reply_rules_from_file()
+    update_rule_count_label()
+    set_status("返答ルールを再読み込みしました。")
+
+
 def update_profile_display():
     """キャラ設定表示を更新する"""
     profile_summary_var.set(
@@ -413,6 +444,11 @@ def update_count_label(visible_count=None):
     count_var.set(f"表示: {visible_count}件 / 履歴: {len(chat_history)}件")
 
 
+def update_rule_count_label():
+    """返答ルール数を表示する"""
+    rule_count_var.set(f"返答ルール: {len(reply_rules['rules'])}種類")
+
+
 def set_status(message):
     """ステータスメッセージを更新する"""
     status_var.set(message)
@@ -420,6 +456,7 @@ def set_status(message):
 
 # データ読み込み
 profile = load_profile_from_file()
+reply_rules = load_reply_rules_from_file()
 chat_history = load_chat_history()
 
 
@@ -435,6 +472,7 @@ search_var = tk.StringVar()
 status_var = tk.StringVar(value="準備完了")
 profile_summary_var = tk.StringVar()
 count_var = tk.StringVar()
+rule_count_var = tk.StringVar()
 
 # ヘッダー
 header_frame = tk.Frame(root, bg=HEADER_COLOR)
@@ -451,7 +489,7 @@ title_label.pack(pady=(12, 3))
 
 subtitle_label = tk.Label(
     header_frame,
-    text="キャラ設定を読み込んで、ルールベースで会話できるデスクトップアプリ",
+    text="キャラ設定と返答ルールを読み込んで会話できるデスクトップアプリ",
     font=("Meiryo", 10),
     bg=HEADER_COLOR,
 )
@@ -594,14 +632,32 @@ personality_preview_text = tk.Text(
 )
 personality_preview_text.pack(pady=(0, 10))
 
-reload_button = tk.Button(
+rule_count_label = tk.Label(
+    profile_frame,
+    textvariable=rule_count_var,
+    font=("Meiryo", 9),
+    bg=PANEL_COLOR,
+    fg="#666666",
+)
+rule_count_label.pack(anchor="w", pady=(0, 8))
+
+reload_profile_button = tk.Button(
     profile_frame,
     text="キャラ設定を再読み込み",
     font=("Meiryo", 10),
     command=reload_profile,
     width=24,
 )
-reload_button.pack(pady=(0, 8))
+reload_profile_button.pack(pady=(0, 8))
+
+reload_rules_button = tk.Button(
+    profile_frame,
+    text="返答ルールを再読み込み",
+    font=("Meiryo", 10),
+    command=reload_reply_rules,
+    width=24,
+)
+reload_rules_button.pack(pady=(0, 8))
 
 clear_history_button = tk.Button(
     profile_frame,
@@ -615,8 +671,8 @@ clear_history_button.pack(pady=(0, 8))
 hint_label = tk.Label(
     profile_frame,
     text=(
-        "v0.9ではAPIなしのルールベース返答です。\n"
-        "返答ルールを増やし、履歴検索と会話スターターを追加しました。\n"
+        "v1.1では返答ルールを reply_rules.json に分離しました。\n"
+        "コードを変えなくても、キーワードや返答を増やせます。\n"
         "次以降でLLM連携や音声読み上げに拡張できます。"
     ),
     font=("Meiryo", 8),
@@ -644,8 +700,9 @@ input_entry.focus_set()
 
 # 初期表示
 update_profile_display()
+update_rule_count_label()
 refresh_chat_display()
-set_status(f"{profile['character_name']} の設定を読み込みました。")
+set_status(f"{profile['character_name']} の設定と返答ルールを読み込みました。")
 
 # アプリ起動
 root.mainloop()
