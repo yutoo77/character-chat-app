@@ -4,9 +4,10 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox
+from tkinter import ttk
 
 
-APP_VERSION = "v1.4"
+APP_VERSION = "v1.5"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -928,8 +929,12 @@ chat_history = load_chat_history()
 # アプリのメインウィンドウ
 root = tk.Tk()
 root.title(APP_TITLE)
-root.geometry("1240x820")
+root.geometry("1050x760")
 root.configure(bg=BG_COLOR)
+
+# ttkの見た目を少し整える
+style = ttk.Style()
+style.configure("TNotebook.Tab", font=("Meiryo", 10), padding=(12, 6))
 
 # 変数
 input_var = tk.StringVar()
@@ -965,13 +970,23 @@ subtitle_label = tk.Label(
 )
 subtitle_label.pack(pady=(0, 12))
 
-# メイン領域
-main_frame = tk.Frame(root, bg=BG_COLOR)
-main_frame.pack(expand=True, fill="both", padx=18, pady=14)
+# タブ領域
+notebook = ttk.Notebook(root)
+notebook.pack(expand=True, fill="both", padx=18, pady=14)
 
-# 左側：チャット
-chat_frame = tk.Frame(main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
-chat_frame.pack(side="left", expand=True, fill="both", padx=(0, 14), ipadx=12, ipady=12)
+chat_tab = tk.Frame(notebook, bg=BG_COLOR)
+profile_tab = tk.Frame(notebook, bg=BG_COLOR)
+rules_tab = tk.Frame(notebook, bg=BG_COLOR)
+
+notebook.add(chat_tab, text="チャット")
+notebook.add(profile_tab, text="キャラ・メモリ")
+notebook.add(rules_tab, text="返答ルール編集")
+
+# --------------------
+# チャットタブ
+# --------------------
+chat_frame = tk.Frame(chat_tab, bg=PANEL_COLOR, bd=1, relief="solid")
+chat_frame.pack(expand=True, fill="both", padx=14, pady=14, ipadx=12, ipady=12)
 
 chat_header = tk.Frame(chat_frame, bg=PANEL_COLOR)
 chat_header.pack(fill="x", pady=(0, 8))
@@ -979,7 +994,7 @@ chat_header.pack(fill="x", pady=(0, 8))
 chat_title = tk.Label(
     chat_header,
     text="チャット",
-    font=("Meiryo", 11, "bold"),
+    font=("Meiryo", 12, "bold"),
     bg=PANEL_COLOR,
 )
 chat_title.pack(side="left")
@@ -1068,62 +1083,124 @@ starter_button = tk.Button(
 )
 starter_button.pack(anchor="w", pady=(10, 0))
 
-# 中央：キャラ情報・メモリ
-profile_frame = tk.Frame(main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
-profile_frame.pack(side="left", fill="y", padx=(0, 14), ipadx=12, ipady=12)
+# --------------------
+# キャラ・メモリタブ
+# --------------------
+profile_main_frame = tk.Frame(profile_tab, bg=BG_COLOR)
+profile_main_frame.pack(expand=True, fill="both", padx=14, pady=14)
+
+character_frame = tk.Frame(profile_main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
+character_frame.pack(side="left", expand=True, fill="both", padx=(0, 14), ipadx=12, ipady=12)
 
 profile_title = tk.Label(
-    profile_frame,
+    character_frame,
     text="キャラ設定",
-    font=("Meiryo", 11, "bold"),
+    font=("Meiryo", 12, "bold"),
     bg=PANEL_COLOR,
 )
 profile_title.pack(anchor="w", pady=(0, 8))
 
 profile_summary_label = tk.Label(
-    profile_frame,
+    character_frame,
     textvariable=profile_summary_var,
     font=("Meiryo", 10),
     bg=PANEL_COLOR,
     justify="left",
-    wraplength=250,
+    wraplength=420,
 )
 profile_summary_label.pack(anchor="w", pady=(0, 10))
 
 personality_preview_text = tk.Text(
-    profile_frame,
-    font=("Meiryo", 9),
+    character_frame,
+    font=("Meiryo", 10),
     wrap="word",
-    width=32,
-    height=10,
+    height=18,
     bd=1,
     relief="solid",
     state="disabled",
 )
-personality_preview_text.pack(pady=(0, 10))
+personality_preview_text.pack(expand=True, fill="both", pady=(0, 10))
+
+reload_profile_button = tk.Button(
+    character_frame,
+    text="キャラ設定を再読み込み",
+    font=("Meiryo", 10),
+    command=reload_profile,
+    width=24,
+)
+reload_profile_button.pack(anchor="w", pady=(0, 6))
+
+memory_frame = tk.Frame(profile_main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
+memory_frame.pack(side="left", expand=True, fill="both", ipadx=12, ipady=12)
 
 memory_title = tk.Label(
-    profile_frame,
+    memory_frame,
     text="メモリ",
-    font=("Meiryo", 11, "bold"),
+    font=("Meiryo", 12, "bold"),
     bg=PANEL_COLOR,
 )
-memory_title.pack(anchor="w", pady=(4, 6))
+memory_title.pack(anchor="w", pady=(0, 8))
 
 memory_summary_text = tk.Text(
-    profile_frame,
-    font=("Meiryo", 9),
+    memory_frame,
+    font=("Meiryo", 10),
     wrap="word",
-    width=32,
-    height=12,
+    height=24,
     bd=1,
     relief="solid",
     state="disabled",
 )
-memory_summary_text.pack(pady=(0, 8))
+memory_summary_text.pack(expand=True, fill="both", pady=(0, 10))
+
+memory_button_frame = tk.Frame(memory_frame, bg=PANEL_COLOR)
+memory_button_frame.pack(anchor="w")
+
+edit_memory_button = tk.Button(
+    memory_button_frame,
+    text="メモリ編集",
+    font=("Meiryo", 10),
+    command=open_memory_window,
+    width=14,
+)
+edit_memory_button.grid(row=0, column=0, padx=(0, 6))
+
+reload_memory_button = tk.Button(
+    memory_button_frame,
+    text="メモリ再読み込み",
+    font=("Meiryo", 10),
+    command=reload_memory,
+    width=16,
+)
+reload_memory_button.grid(row=0, column=1, padx=6)
+
+clear_history_button = tk.Button(
+    memory_button_frame,
+    text="会話履歴を削除",
+    font=("Meiryo", 10),
+    command=clear_history,
+    width=16,
+)
+clear_history_button.grid(row=0, column=2, padx=6)
+
+# --------------------
+# 返答ルール編集タブ
+# --------------------
+rules_main_frame = tk.Frame(rules_tab, bg=BG_COLOR)
+rules_main_frame.pack(expand=True, fill="both", padx=14, pady=14)
+
+rules_list_frame = tk.Frame(rules_main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
+rules_list_frame.pack(side="left", fill="both", padx=(0, 14), ipadx=12, ipady=12)
+
+rules_title = tk.Label(
+    rules_list_frame,
+    text="返答ルール一覧",
+    font=("Meiryo", 12, "bold"),
+    bg=PANEL_COLOR,
+)
+rules_title.pack(anchor="w", pady=(0, 8))
 
 rule_count_label = tk.Label(
-    profile_frame,
+    rules_list_frame,
     textvariable=rule_count_var,
     font=("Meiryo", 9),
     bg=PANEL_COLOR,
@@ -1132,7 +1209,7 @@ rule_count_label = tk.Label(
 rule_count_label.pack(anchor="w", pady=(0, 4))
 
 rules_status_label = tk.Label(
-    profile_frame,
+    rules_list_frame,
     textvariable=rules_status_var,
     font=("Meiryo", 9),
     bg=PANEL_COLOR,
@@ -1140,128 +1217,99 @@ rules_status_label = tk.Label(
 )
 rules_status_label.pack(anchor="w", pady=(0, 8))
 
-reload_profile_button = tk.Button(
-    profile_frame,
-    text="キャラ設定を再読み込み",
-    font=("Meiryo", 10),
-    command=reload_profile,
-    width=24,
-)
-reload_profile_button.pack(pady=(0, 6))
-
-edit_memory_button = tk.Button(
-    profile_frame,
-    text="メモリ編集",
-    font=("Meiryo", 10),
-    command=open_memory_window,
-    width=24,
-)
-edit_memory_button.pack(pady=(0, 6))
-
-reload_memory_button = tk.Button(
-    profile_frame,
-    text="メモリ再読み込み",
-    font=("Meiryo", 10),
-    command=reload_memory,
-    width=24,
-)
-reload_memory_button.pack(pady=(0, 6))
-
-reload_rules_button = tk.Button(
-    profile_frame,
-    text="返答ルールを再読み込み",
-    font=("Meiryo", 10),
-    command=reload_reply_rules,
-    width=24,
-)
-reload_rules_button.pack(pady=(0, 6))
-
-clear_history_button = tk.Button(
-    profile_frame,
-    text="会話履歴を削除",
-    font=("Meiryo", 10),
-    command=clear_history,
-    width=24,
-)
-clear_history_button.pack(pady=(0, 8))
-
-# 右側：返答ルール編集
-rules_frame = tk.Frame(main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
-rules_frame.pack(side="left", fill="both", ipadx=12, ipady=12)
-
-rules_title = tk.Label(
-    rules_frame,
-    text="返答ルール編集",
-    font=("Meiryo", 11, "bold"),
-    bg=PANEL_COLOR,
-)
-rules_title.pack(anchor="w", pady=(0, 8))
-
 rule_listbox = tk.Listbox(
-    rules_frame,
+    rules_list_frame,
     font=("Meiryo", 9),
-    width=44,
-    height=10,
+    width=42,
     activestyle="dotbox",
 )
-rule_listbox.pack(fill="x", pady=(0, 8))
+rule_listbox.pack(expand=True, fill="both", pady=(0, 8))
 rule_listbox.bind("<<ListboxSelect>>", on_rule_selected)
 
+rules_list_button_frame = tk.Frame(rules_list_frame, bg=PANEL_COLOR)
+rules_list_button_frame.pack(anchor="w")
+
+reload_rules_button = tk.Button(
+    rules_list_button_frame,
+    text="返答ルール再読み込み",
+    font=("Meiryo", 10),
+    command=reload_reply_rules,
+    width=20,
+)
+reload_rules_button.grid(row=0, column=0, padx=(0, 6))
+
+save_rules_button = tk.Button(
+    rules_list_button_frame,
+    text="ルール保存",
+    font=("Meiryo", 10),
+    command=save_reply_rules,
+    width=12,
+)
+save_rules_button.grid(row=0, column=1, padx=6)
+
+rules_editor_frame = tk.Frame(rules_main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
+rules_editor_frame.pack(side="left", expand=True, fill="both", ipadx=12, ipady=12)
+
+editor_title = tk.Label(
+    rules_editor_frame,
+    text="返答ルール編集",
+    font=("Meiryo", 12, "bold"),
+    bg=PANEL_COLOR,
+)
+editor_title.pack(anchor="w", pady=(0, 8))
+
 tk.Label(
-    rules_frame,
+    rules_editor_frame,
     text="ルール名",
     font=("Meiryo", 9),
     bg=PANEL_COLOR,
 ).pack(anchor="w")
 
 rule_name_entry = tk.Entry(
-    rules_frame,
+    rules_editor_frame,
     textvariable=rule_name_var,
-    font=("Meiryo", 9),
-    width=44,
+    font=("Meiryo", 10),
 )
-rule_name_entry.pack(fill="x", pady=(2, 6))
+rule_name_entry.pack(fill="x", pady=(2, 8))
 
 tk.Label(
-    rules_frame,
+    rules_editor_frame,
     text="キーワード（カンマ区切り）",
     font=("Meiryo", 9),
     bg=PANEL_COLOR,
 ).pack(anchor="w")
 
 rule_keywords_entry = tk.Entry(
-    rules_frame,
+    rules_editor_frame,
     textvariable=rule_keywords_var,
-    font=("Meiryo", 9),
-    width=44,
+    font=("Meiryo", 10),
 )
-rule_keywords_entry.pack(fill="x", pady=(2, 6))
+rule_keywords_entry.pack(fill="x", pady=(2, 8))
 
 tk.Label(
-    rules_frame,
+    rules_editor_frame,
     text="返答候補（複数候補は --- の行で区切る）",
     font=("Meiryo", 9),
     bg=PANEL_COLOR,
 ).pack(anchor="w")
 
 rule_replies_text = tk.Text(
-    rules_frame,
-    font=("Meiryo", 9),
+    rules_editor_frame,
+    font=("Meiryo", 10),
     wrap="word",
-    width=44,
-    height=13,
+    height=18,
     bd=1,
     relief="solid",
 )
-rule_replies_text.pack(fill="both", expand=True, pady=(2, 8))
+rule_replies_text.pack(expand=True, fill="both", pady=(2, 8))
 
-rule_button_frame = tk.Frame(rules_frame, bg=PANEL_COLOR)
-rule_button_frame.pack(fill="x", pady=(0, 8))
+rule_button_frame = tk.Frame(rules_editor_frame, bg=PANEL_COLOR)
+rule_button_frame.pack(anchor="w", pady=(0, 8))
 
 new_rule_button = tk.Button(
     rule_button_frame,
     text="新規",
-    font=("Meiryo", 9),
+    font=("Meiryo", 10),
     command=clear_rule_editor,
     width=8,
 )
@@ -1270,7 +1318,7 @@ new_rule_button.grid(row=0, column=0, padx=3)
 add_update_rule_button = tk.Button(
     rule_button_frame,
     text="追加/更新",
-    font=("Meiryo", 9),
+    font=("Meiryo", 10),
     command=add_or_update_rule,
     width=10,
 )
@@ -1279,33 +1327,23 @@ add_update_rule_button.grid(row=0, column=1, padx=3)
 delete_rule_button = tk.Button(
     rule_button_frame,
     text="削除",
-    font=("Meiryo", 9),
+    font=("Meiryo", 10),
     command=delete_rule,
     width=8,
 )
 delete_rule_button.grid(row=0, column=2, padx=3)
 
-save_rules_button = tk.Button(
-    rule_button_frame,
-    text="ルール保存",
-    font=("Meiryo", 9),
-    command=save_reply_rules,
-    width=10,
-)
-save_rules_button.grid(row=0, column=3, padx=3)
-
 rule_hint_label = tk.Label(
-    rules_frame,
+    rules_editor_frame,
     text=(
-        "例: {user_call}、おつかれさま。\n"
         "使える変数: {character_name}, {first_person}, {user_call}, {relationship}, "
-        "{current_goal}, {recent_progress}, {memory_topics}"
+        "{user_name}, {current_goal}, {recent_progress}, {memory_topics}, {memory_notes}"
     ),
     font=("Meiryo", 8),
     bg=PANEL_COLOR,
     fg="#666666",
     justify="left",
-    wraplength=330,
+    wraplength=560,
 )
 rule_hint_label.pack(anchor="w")
 
