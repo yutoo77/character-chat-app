@@ -6,7 +6,7 @@ from pathlib import Path
 from tkinter import messagebox
 
 
-APP_VERSION = "v1.3"
+APP_VERSION = "v1.4"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -156,7 +156,6 @@ def load_reply_rules_from_file():
     if isinstance(raw_rules, list):
         for raw_rule in raw_rules:
             rule = normalize_reply_rule(raw_rule)
-
             if rule is not None:
                 rules.append(rule)
 
@@ -261,7 +260,6 @@ def load_chat_history():
 
     for raw_message in data:
         message = normalize_message(raw_message)
-
         if message is not None:
             history.append(message)
 
@@ -342,7 +340,81 @@ def add_message(role, message):
 
 def contains_any(text, keywords):
     """文字列にキーワードのどれかが含まれているか確認する"""
-    return any(keyword.lower() in text for keyword in keywords)
+    return any(keyword.lower() in text.lower() for keyword in keywords)
+
+
+def extract_after_marker(text, markers):
+    """指定したマーカーの後ろにある文字列を取り出す"""
+    for marker in markers:
+        if marker in text:
+            return text.split(marker, 1)[1].strip()
+
+    return ""
+
+
+def append_memory_note(note):
+    """memoryのnotesに追記する"""
+    timestamp = now_text()
+    current_notes = memory.get("notes", "").strip()
+    new_note = f"[{timestamp}] {note}"
+
+    if current_notes:
+        memory["notes"] = current_notes + "\n" + new_note
+    else:
+        memory["notes"] = new_note
+
+
+def update_memory_from_user_message(user_message):
+    """ユーザー発言から簡単なメモリ更新を行う"""
+    text = user_message.strip()
+    updated_fields = []
+
+    goal = extract_after_marker(
+        text,
+        ["今の目標は", "いまの目標は", "目標は", "ゴールは"],
+    )
+
+    if goal:
+        memory["current_goal"] = goal
+        updated_fields.append("現在の目標")
+
+    if contains_any(text, ["できた", "終わった", "完了", "いけた", "進んだ"]):
+        if contains_any(text, ["最近", "今日", "さっき", "今", "今回"]):
+            memory["recent_progress"] = text
+            updated_fields.append("最近の進捗")
+
+    progress = extract_after_marker(
+        text,
+        ["最近の進捗は", "進捗は"],
+    )
+
+    if progress:
+        memory["recent_progress"] = progress
+        updated_fields.append("最近の進捗")
+
+    topics = extract_after_marker(
+        text,
+        ["好きな話題は", "興味あるのは", "興味があるのは"],
+    )
+
+    if topics:
+        memory["favorite_topics"] = topics
+        updated_fields.append("好きな話題")
+
+    note = extract_after_marker(
+        text,
+        ["覚えて：", "覚えて:", "メモ：", "メモ:"],
+    )
+
+    if note:
+        append_memory_note(note)
+        updated_fields.append("メモ")
+
+    if updated_fields:
+        save_memory_to_file()
+        update_memory_display()
+
+    return updated_fields
 
 
 def format_reply_template(template):
@@ -393,10 +465,20 @@ def send_message(event=None):
 
     add_message("user", user_message)
 
+    updated_fields = update_memory_from_user_message(user_message)
+
     reply = generate_character_reply(user_message)
+
+    if updated_fields:
+        updated_text = "、".join(updated_fields)
+        reply += f"\n\nちなみに、{updated_text}をメモリに残しておいたよ。"
+
     add_message("character", reply)
 
-    set_status("メッセージを送信しました。")
+    if updated_fields:
+        set_status(f"メモリを更新しました: {', '.join(updated_fields)}")
+    else:
+        set_status("メッセージを送信しました。")
 
 
 def add_starter_message():
