@@ -6,7 +6,7 @@ from pathlib import Path
 from tkinter import messagebox
 
 
-APP_VERSION = "v1.1"
+APP_VERSION = "v1.2"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -84,7 +84,6 @@ def load_json_file(path, default_value):
 def load_profile_from_file():
     """character_profile.json からキャラ設定を読み込む"""
     data = load_json_file(PROFILE_FILE, DEFAULT_PROFILE.copy())
-
     profile = DEFAULT_PROFILE.copy()
 
     if isinstance(data, dict):
@@ -118,6 +117,9 @@ def normalize_reply_rule(raw_rule):
         for reply in replies
         if str(reply).strip()
     ]
+
+    if not name:
+        name = "unnamed"
 
     if not normalized_keywords or not normalized_replies:
         return None
@@ -167,6 +169,32 @@ def load_reply_rules_from_file():
         "rules": rules,
         "default_replies": default_replies,
     }
+
+
+def save_reply_rules_to_file():
+    """返答ルールを reply_rules.json に保存する"""
+    RULES_FILE.write_text(
+        json.dumps(reply_rules, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def make_reply_rules_snapshot():
+    """現在の返答ルールを比較用文字列にする"""
+    return json.dumps(reply_rules, ensure_ascii=False, sort_keys=True)
+
+
+def has_unsaved_rule_changes():
+    """返答ルールに未保存変更があるか確認する"""
+    return make_reply_rules_snapshot() != last_saved_rules_snapshot_var.get()
+
+
+def update_rules_status_label():
+    """返答ルールの保存状態表示を更新する"""
+    if has_unsaved_rule_changes():
+        rules_status_var.set("ルール未保存")
+    else:
+        rules_status_var.set("ルール保存済み")
 
 
 def normalize_message(raw_message):
@@ -283,7 +311,7 @@ def add_message(role, message):
 
 def contains_any(text, keywords):
     """文字列にキーワードのどれかが含まれているか確認する"""
-    return any(keyword in text for keyword in keywords)
+    return any(keyword.lower() in text for keyword in keywords)
 
 
 def format_reply_template(template):
@@ -297,7 +325,7 @@ def format_reply_template(template):
 
     try:
         return template.format(**values)
-    except KeyError:
+    except Exception:
         return template
 
 
@@ -411,8 +439,24 @@ def reload_reply_rules():
     """返答ルールを再読み込みする"""
     global reply_rules
 
+    if has_unsaved_rule_changes():
+        answer = messagebox.askyesno(
+            "未保存の返答ルール",
+            "保存していない返答ルールの変更があります。\n"
+            "再読み込みすると、現在の編集内容は失われます。\n\n"
+            "再読み込みしますか？",
+        )
+
+        if not answer:
+            set_status("返答ルールの再読み込みをキャンセルしました。")
+            return
+
     reply_rules = load_reply_rules_from_file()
+    last_saved_rules_snapshot_var.set(make_reply_rules_snapshot())
+    refresh_rule_list()
+    clear_rule_editor()
     update_rule_count_label()
+    update_rules_status_label()
     set_status("返答ルールを再読み込みしました。")
 
 
@@ -449,6 +493,190 @@ def update_rule_count_label():
     rule_count_var.set(f"返答ルール: {len(reply_rules['rules'])}種類")
 
 
+def format_rule_for_list(rule):
+    """返答ルール一覧用の文字列を作る"""
+    keyword_count = len(rule["keywords"])
+    reply_count = len(rule["replies"])
+    return f"{rule['name']} / キーワード{keyword_count}個 / 返答{reply_count}個"
+
+
+def refresh_rule_list():
+    """返答ルール一覧を更新する"""
+    rule_listbox.delete(0, tk.END)
+
+    for rule in reply_rules["rules"]:
+        rule_listbox.insert(tk.END, format_rule_for_list(rule))
+
+    update_rule_count_label()
+    update_rules_status_label()
+
+
+def get_selected_rule_index():
+    """選択中の返答ルール番号を取得する"""
+    selection = rule_listbox.curselection()
+
+    if not selection:
+        return None
+
+    return selection[0]
+
+
+def set_rule_reply_text(replies):
+    """返答候補をText欄に表示する"""
+    rule_replies_text.delete("1.0", tk.END)
+    rule_replies_text.insert("1.0", "\n---\n".join(replies))
+
+
+def get_rule_replies_from_text():
+    """Text欄から返答候補を取得する"""
+    raw_text = rule_replies_text.get("1.0", "end-1c").strip()
+
+    if not raw_text:
+        return []
+
+    return [
+        part.strip()
+        for part in raw_text.split("\n---\n")
+        if part.strip()
+    ]
+
+
+def parse_keywords(keyword_text):
+    """カンマ区切りのキーワードをリストにする"""
+    normalized = keyword_text.replace("、", ",")
+    return [
+        keyword.strip()
+        for keyword in normalized.split(",")
+        if keyword.strip()
+    ]
+
+
+def on_rule_selected(event=None):
+    """返答ルールが選択されたとき、編集欄に反映する"""
+    selected_index = get_selected_rule_index()
+
+    if selected_index is None:
+        return
+
+    rule = reply_rules["rules"][selected_index]
+
+    rule_name_var.set(rule["name"])
+    rule_keywords_var.set(", ".join(rule["keywords"]))
+    set_rule_reply_text(rule["replies"])
+
+    set_status(f"返答ルールを選択しました: {rule['name']}")
+
+
+def clear_rule_editor():
+    """返答ルール編集欄を空にする"""
+    rule_listbox.selection_clear(0, tk.END)
+    rule_name_var.set("")
+    rule_keywords_var.set("")
+    rule_replies_text.delete("1.0", tk.END)
+    set_status("返答ルール編集欄をクリアしました。")
+
+
+def get_rule_from_editor():
+    """編集欄から返答ルールを作る"""
+    name = rule_name_var.get().strip()
+    keywords = parse_keywords(rule_keywords_var.get())
+    replies = get_rule_replies_from_text()
+
+    if not name:
+        messagebox.showerror("入力エラー", "ルール名を入力してね。")
+        return None
+
+    if not keywords:
+        messagebox.showerror("入力エラー", "キーワードを1つ以上入力してね。")
+        return None
+
+    if not replies:
+        messagebox.showerror("入力エラー", "返答候補を1つ以上入力してね。")
+        return None
+
+    return {
+        "name": name,
+        "keywords": keywords,
+        "replies": replies,
+    }
+
+
+def add_or_update_rule():
+    """返答ルールを追加または更新する"""
+    rule = get_rule_from_editor()
+
+    if rule is None:
+        return
+
+    selected_index = get_selected_rule_index()
+
+    if selected_index is None:
+        reply_rules["rules"].append(rule)
+        selected_index = len(reply_rules["rules"]) - 1
+        set_status(f"返答ルールを追加しました: {rule['name']}（未保存）")
+    else:
+        reply_rules["rules"][selected_index] = rule
+        set_status(f"返答ルールを更新しました: {rule['name']}（未保存）")
+
+    refresh_rule_list()
+    rule_listbox.selection_set(selected_index)
+    rule_listbox.activate(selected_index)
+    update_rules_status_label()
+
+
+def delete_rule():
+    """選択中の返答ルールを削除する"""
+    selected_index = get_selected_rule_index()
+
+    if selected_index is None:
+        messagebox.showinfo("選択エラー", "削除する返答ルールを選択してね。")
+        return
+
+    rule = reply_rules["rules"][selected_index]
+
+    answer = messagebox.askyesno(
+        "削除の確認",
+        f"この返答ルールを削除しますか？\n\n{rule['name']}",
+    )
+
+    if not answer:
+        set_status("返答ルール削除をキャンセルしました。")
+        return
+
+    reply_rules["rules"].pop(selected_index)
+
+    refresh_rule_list()
+    clear_rule_editor()
+    update_rules_status_label()
+    set_status(f"返答ルールを削除しました: {rule['name']}（未保存）")
+
+
+def save_reply_rules():
+    """返答ルールを reply_rules.json に保存する"""
+    save_reply_rules_to_file()
+    last_saved_rules_snapshot_var.set(make_reply_rules_snapshot())
+    update_rules_status_label()
+    set_status("返答ルールを reply_rules.json に保存しました。")
+    messagebox.showinfo("保存完了", "返答ルールを保存したよ。")
+
+
+def on_close():
+    """アプリ終了時の処理"""
+    if has_unsaved_rule_changes():
+        answer = messagebox.askyesno(
+            "未保存の返答ルール",
+            "保存していない返答ルールの変更があります。\n"
+            "保存せずに終了すると、変更は失われます。\n\n"
+            "終了しますか？",
+        )
+
+        if not answer:
+            set_status("終了をキャンセルしました。")
+            return
+
+    root.destroy()
+
+
 def set_status(message):
     """ステータスメッセージを更新する"""
     status_var.set(message)
@@ -463,7 +691,7 @@ chat_history = load_chat_history()
 # アプリのメインウィンドウ
 root = tk.Tk()
 root.title(APP_TITLE)
-root.geometry("1020x740")
+root.geometry("1180x780")
 root.configure(bg=BG_COLOR)
 
 # 変数
@@ -473,6 +701,11 @@ status_var = tk.StringVar(value="準備完了")
 profile_summary_var = tk.StringVar()
 count_var = tk.StringVar()
 rule_count_var = tk.StringVar()
+rules_status_var = tk.StringVar(value="ルール保存済み")
+last_saved_rules_snapshot_var = tk.StringVar(value="")
+
+rule_name_var = tk.StringVar()
+rule_keywords_var = tk.StringVar()
 
 # ヘッダー
 header_frame = tk.Frame(root, bg=HEADER_COLOR)
@@ -598,9 +831,9 @@ starter_button = tk.Button(
 )
 starter_button.pack(anchor="w", pady=(10, 0))
 
-# 右側：キャラ情報
+# 中央：キャラ情報
 profile_frame = tk.Frame(main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
-profile_frame.pack(side="left", fill="y", ipadx=12, ipady=12)
+profile_frame.pack(side="left", fill="y", padx=(0, 14), ipadx=12, ipady=12)
 
 profile_title = tk.Label(
     profile_frame,
@@ -616,7 +849,7 @@ profile_summary_label = tk.Label(
     font=("Meiryo", 10),
     bg=PANEL_COLOR,
     justify="left",
-    wraplength=270,
+    wraplength=250,
 )
 profile_summary_label.pack(anchor="w", pady=(0, 10))
 
@@ -624,8 +857,8 @@ personality_preview_text = tk.Text(
     profile_frame,
     font=("Meiryo", 9),
     wrap="word",
-    width=35,
-    height=18,
+    width=32,
+    height=16,
     bd=1,
     relief="solid",
     state="disabled",
@@ -639,7 +872,16 @@ rule_count_label = tk.Label(
     bg=PANEL_COLOR,
     fg="#666666",
 )
-rule_count_label.pack(anchor="w", pady=(0, 8))
+rule_count_label.pack(anchor="w", pady=(0, 4))
+
+rules_status_label = tk.Label(
+    profile_frame,
+    textvariable=rules_status_var,
+    font=("Meiryo", 9),
+    bg=PANEL_COLOR,
+    fg="#666666",
+)
+rules_status_label.pack(anchor="w", pady=(0, 8))
 
 reload_profile_button = tk.Button(
     profile_frame,
@@ -671,17 +913,139 @@ clear_history_button.pack(pady=(0, 8))
 hint_label = tk.Label(
     profile_frame,
     text=(
-        "v1.1では返答ルールを reply_rules.json に分離しました。\n"
-        "コードを変えなくても、キーワードや返答を増やせます。\n"
-        "次以降でLLM連携や音声読み上げに拡張できます。"
+        "v1.2では返答ルールを画面から編集できます。\n"
+        "返答候補を複数入れるときは、行に --- を置いて区切ります。"
     ),
     font=("Meiryo", 8),
     bg=PANEL_COLOR,
     fg="#666666",
     justify="left",
-    wraplength=270,
+    wraplength=250,
 )
 hint_label.pack(anchor="w", pady=(8, 0))
+
+# 右側：返答ルール編集
+rules_frame = tk.Frame(main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
+rules_frame.pack(side="left", fill="both", ipadx=12, ipady=12)
+
+rules_title = tk.Label(
+    rules_frame,
+    text="返答ルール編集",
+    font=("Meiryo", 11, "bold"),
+    bg=PANEL_COLOR,
+)
+rules_title.pack(anchor="w", pady=(0, 8))
+
+rule_listbox = tk.Listbox(
+    rules_frame,
+    font=("Meiryo", 9),
+    width=44,
+    height=10,
+    activestyle="dotbox",
+)
+rule_listbox.pack(fill="x", pady=(0, 8))
+rule_listbox.bind("<<ListboxSelect>>", on_rule_selected)
+
+tk.Label(
+    rules_frame,
+    text="ルール名",
+    font=("Meiryo", 9),
+    bg=PANEL_COLOR,
+).pack(anchor="w")
+
+rule_name_entry = tk.Entry(
+    rules_frame,
+    textvariable=rule_name_var,
+    font=("Meiryo", 9),
+    width=44,
+)
+rule_name_entry.pack(fill="x", pady=(2, 6))
+
+tk.Label(
+    rules_frame,
+    text="キーワード（カンマ区切り）",
+    font=("Meiryo", 9),
+    bg=PANEL_COLOR,
+).pack(anchor="w")
+
+rule_keywords_entry = tk.Entry(
+    rules_frame,
+    textvariable=rule_keywords_var,
+    font=("Meiryo", 9),
+    width=44,
+)
+rule_keywords_entry.pack(fill="x", pady=(2, 6))
+
+tk.Label(
+    rules_frame,
+    text="返答候補（複数候補は --- の行で区切る）",
+    font=("Meiryo", 9),
+    bg=PANEL_COLOR,
+).pack(anchor="w")
+
+rule_replies_text = tk.Text(
+    rules_frame,
+    font=("Meiryo", 9),
+    wrap="word",
+    width=44,
+    height=13,
+    bd=1,
+    relief="solid",
+)
+rule_replies_text.pack(fill="both", expand=True, pady=(2, 8))
+
+rule_button_frame = tk.Frame(rules_frame, bg=PANEL_COLOR)
+rule_button_frame.pack(fill="x", pady=(0, 8))
+
+new_rule_button = tk.Button(
+    rule_button_frame,
+    text="新規",
+    font=("Meiryo", 9),
+    command=clear_rule_editor,
+    width=8,
+)
+new_rule_button.grid(row=0, column=0, padx=3)
+
+add_update_rule_button = tk.Button(
+    rule_button_frame,
+    text="追加/更新",
+    font=("Meiryo", 9),
+    command=add_or_update_rule,
+    width=10,
+)
+add_update_rule_button.grid(row=0, column=1, padx=3)
+
+delete_rule_button = tk.Button(
+    rule_button_frame,
+    text="削除",
+    font=("Meiryo", 9),
+    command=delete_rule,
+    width=8,
+)
+delete_rule_button.grid(row=0, column=2, padx=3)
+
+save_rules_button = tk.Button(
+    rule_button_frame,
+    text="ルール保存",
+    font=("Meiryo", 9),
+    command=save_reply_rules,
+    width=10,
+)
+save_rules_button.grid(row=0, column=3, padx=3)
+
+rule_hint_label = tk.Label(
+    rules_frame,
+    text=(
+        "例: {user_call}、おつかれさま。\n"
+        "使える変数: {character_name}, {first_person}, {user_call}, {relationship}"
+    ),
+    font=("Meiryo", 8),
+    bg=PANEL_COLOR,
+    fg="#666666",
+    justify="left",
+    wraplength=330,
+)
+rule_hint_label.pack(anchor="w")
 
 # ステータスバー
 status_label = tk.Label(
@@ -693,14 +1057,18 @@ status_label = tk.Label(
 )
 status_label.pack(fill="x", padx=18, pady=(0, 8))
 
-# ショートカット
+# ショートカット・終了処理
 input_entry.bind("<Return>", send_message)
 search_entry.bind("<Return>", lambda event: search_history())
+root.protocol("WM_DELETE_WINDOW", on_close)
 input_entry.focus_set()
 
 # 初期表示
+last_saved_rules_snapshot_var.set(make_reply_rules_snapshot())
 update_profile_display()
+refresh_rule_list()
 update_rule_count_label()
+update_rules_status_label()
 refresh_chat_display()
 set_status(f"{profile['character_name']} の設定と返答ルールを読み込みました。")
 
