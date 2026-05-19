@@ -6,12 +6,13 @@ from pathlib import Path
 from tkinter import messagebox
 
 
-APP_VERSION = "v1.2"
+APP_VERSION = "v1.3"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
 HISTORY_FILE = Path("chat_history.json")
 RULES_FILE = Path("reply_rules.json")
+MEMORY_FILE = Path("memory.json")
 
 BG_COLOR = "#f4f4f4"
 PANEL_COLOR = "#ffffff"
@@ -61,6 +62,15 @@ DEFAULT_REPLY_RULES = {
 }
 
 
+DEFAULT_MEMORY = {
+    "user_name": "ふぁるるくん",
+    "current_goal": "Character Chat Appを本格的な相棒アプリに育てる",
+    "recent_progress": "Python/Tkinterで複数の小さなデスクトップアプリを作成し、GitHub公開まで経験した",
+    "favorite_topics": "開発、研究、英会話、音声対話、RAG、キャラクター会話アプリ",
+    "notes": "一気に完璧を目指さず、小さい機能追加を積み上げる。疲れているときは休憩も前進として扱う。",
+}
+
+
 def now_text():
     """現在時刻を YYYY-MM-DD HH:MM 形式で返す"""
     return datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -84,14 +94,14 @@ def load_json_file(path, default_value):
 def load_profile_from_file():
     """character_profile.json からキャラ設定を読み込む"""
     data = load_json_file(PROFILE_FILE, DEFAULT_PROFILE.copy())
-    profile = DEFAULT_PROFILE.copy()
+    profile_data = DEFAULT_PROFILE.copy()
 
     if isinstance(data, dict):
-        for key in profile:
+        for key in profile_data:
             if key in data:
-                profile[key] = str(data[key])
+                profile_data[key] = str(data[key])
 
-    return profile
+    return profile_data
 
 
 def normalize_reply_rule(raw_rule):
@@ -195,6 +205,27 @@ def update_rules_status_label():
         rules_status_var.set("ルール未保存")
     else:
         rules_status_var.set("ルール保存済み")
+
+
+def load_memory_from_file():
+    """memory.json からユーザーメモリを読み込む"""
+    data = load_json_file(MEMORY_FILE, DEFAULT_MEMORY.copy())
+    memory_data = DEFAULT_MEMORY.copy()
+
+    if isinstance(data, dict):
+        for key in memory_data:
+            if key in data:
+                memory_data[key] = str(data[key])
+
+    return memory_data
+
+
+def save_memory_to_file():
+    """ユーザーメモリを memory.json に保存する"""
+    MEMORY_FILE.write_text(
+        json.dumps(memory, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def normalize_message(raw_message):
@@ -315,12 +346,17 @@ def contains_any(text, keywords):
 
 
 def format_reply_template(template):
-    """返答テンプレートにキャラ設定を差し込む"""
+    """返答テンプレートにキャラ設定・メモリ情報を差し込む"""
     values = {
         "character_name": profile["character_name"],
         "first_person": profile["first_person"],
         "user_call": profile["user_call"],
         "relationship": profile["relationship"],
+        "user_name": memory["user_name"],
+        "current_goal": memory["current_goal"],
+        "recent_progress": memory["recent_progress"],
+        "memory_topics": memory["favorite_topics"],
+        "memory_notes": memory["notes"],
     }
 
     try:
@@ -366,10 +402,10 @@ def send_message(event=None):
 def add_starter_message():
     """キャラ側から会話のきっかけを出す"""
     starters = [
-        "{user_call}、今日は何から進めよっか。小さい一歩で大丈夫だよ。",
+        "{user_call}、今日は何から進めよっか。今の目標は「{current_goal}」だよね。小さい一歩で大丈夫だよ。",
         "今の気分を一言で言うならどんな感じ？そこから一緒に整理しよ。",
         "作りたいものの話、少ししよ。ワクワクする方向から決めてもいいと思う。",
-        "今日は頑張る日？整える日？どっちでも、ちゃんと意味はあるよ。",
+        "最近の進捗は「{recent_progress}」って覚えてるよ。ここから次の一手を決めよ。",
     ]
 
     search_var.set("")
@@ -435,6 +471,15 @@ def reload_profile():
     set_status("キャラ設定を再読み込みしました。")
 
 
+def reload_memory():
+    """メモリを再読み込みする"""
+    global memory
+
+    memory = load_memory_from_file()
+    update_memory_display()
+    set_status("メモリを再読み込みしました。")
+
+
 def reload_reply_rules():
     """返答ルールを再読み込みする"""
     global reply_rules
@@ -478,6 +523,21 @@ def update_profile_display():
         f"支援スタイル:\n{profile['support_style']}"
     )
     personality_preview_text.config(state="disabled")
+
+
+def update_memory_display():
+    """メモリ概要表示を更新する"""
+    memory_summary_text.config(state="normal")
+    memory_summary_text.delete("1.0", tk.END)
+    memory_summary_text.insert(
+        "1.0",
+        f"ユーザー名:\n{memory['user_name']}\n\n"
+        f"現在の目標:\n{memory['current_goal']}\n\n"
+        f"最近の進捗:\n{memory['recent_progress']}\n\n"
+        f"好きな話題:\n{memory['favorite_topics']}\n\n"
+        f"メモ:\n{memory['notes']}"
+    )
+    memory_summary_text.config(state="disabled")
 
 
 def update_count_label(visible_count=None):
@@ -660,6 +720,100 @@ def save_reply_rules():
     messagebox.showinfo("保存完了", "返答ルールを保存したよ。")
 
 
+def open_memory_window():
+    """メモリ編集ウィンドウを開く"""
+    memory_window = tk.Toplevel(root)
+    memory_window.title("メモリ編集")
+    memory_window.geometry("700x620")
+    memory_window.configure(bg=BG_COLOR)
+
+    user_name_var = tk.StringVar(value=memory["user_name"])
+    current_goal_var = tk.StringVar(value=memory["current_goal"])
+
+    frame = tk.Frame(memory_window, bg=PANEL_COLOR, bd=1, relief="solid")
+    frame.pack(expand=True, fill="both", padx=16, pady=16, ipadx=12, ipady=12)
+
+    title_label = tk.Label(
+        frame,
+        text="メモリ編集",
+        font=("Meiryo", 14, "bold"),
+        bg=PANEL_COLOR,
+        fg=ACCENT_COLOR,
+    )
+    title_label.pack(anchor="w", pady=(0, 10))
+
+    tk.Label(frame, text="ユーザー名", font=("Meiryo", 9), bg=PANEL_COLOR).pack(anchor="w")
+    user_name_entry = tk.Entry(frame, textvariable=user_name_var, font=("Meiryo", 10))
+    user_name_entry.pack(fill="x", pady=(2, 8))
+
+    tk.Label(frame, text="現在の目標", font=("Meiryo", 9), bg=PANEL_COLOR).pack(anchor="w")
+    current_goal_entry = tk.Entry(frame, textvariable=current_goal_var, font=("Meiryo", 10))
+    current_goal_entry.pack(fill="x", pady=(2, 8))
+
+    def add_text_area(label_text, initial_text, height):
+        tk.Label(
+            frame,
+            text=label_text,
+            font=("Meiryo", 9),
+            bg=PANEL_COLOR,
+        ).pack(anchor="w")
+
+        text_widget = tk.Text(
+            frame,
+            font=("Meiryo", 10),
+            height=height,
+            wrap="word",
+            bd=1,
+            relief="solid",
+        )
+        text_widget.pack(fill="x", pady=(2, 8))
+        text_widget.insert("1.0", initial_text)
+        return text_widget
+
+    recent_progress_text = add_text_area("最近の進捗", memory["recent_progress"], 4)
+    favorite_topics_text = add_text_area("好きな話題", memory["favorite_topics"], 3)
+    notes_text = add_text_area("メモ", memory["notes"], 5)
+
+    def save_memory_from_window():
+        global memory
+
+        new_memory = {
+            "user_name": user_name_var.get().strip() or DEFAULT_MEMORY["user_name"],
+            "current_goal": current_goal_var.get().strip() or DEFAULT_MEMORY["current_goal"],
+            "recent_progress": recent_progress_text.get("1.0", "end-1c").strip(),
+            "favorite_topics": favorite_topics_text.get("1.0", "end-1c").strip(),
+            "notes": notes_text.get("1.0", "end-1c").strip(),
+        }
+
+        memory = new_memory
+        save_memory_to_file()
+        update_memory_display()
+
+        set_status("メモリを memory.json に保存しました。")
+        messagebox.showinfo("保存完了", "メモリを保存したよ。")
+
+    button_frame = tk.Frame(frame, bg=PANEL_COLOR)
+    button_frame.pack(pady=(6, 0))
+
+    save_button = tk.Button(
+        button_frame,
+        text="保存",
+        font=("Meiryo", 10),
+        command=save_memory_from_window,
+        width=10,
+    )
+    save_button.grid(row=0, column=0, padx=5)
+
+    close_button = tk.Button(
+        button_frame,
+        text="閉じる",
+        font=("Meiryo", 10),
+        command=memory_window.destroy,
+        width=10,
+    )
+    close_button.grid(row=0, column=1, padx=5)
+
+
 def on_close():
     """アプリ終了時の処理"""
     if has_unsaved_rule_changes():
@@ -685,13 +839,14 @@ def set_status(message):
 # データ読み込み
 profile = load_profile_from_file()
 reply_rules = load_reply_rules_from_file()
+memory = load_memory_from_file()
 chat_history = load_chat_history()
 
 
 # アプリのメインウィンドウ
 root = tk.Tk()
 root.title(APP_TITLE)
-root.geometry("1180x780")
+root.geometry("1240x820")
 root.configure(bg=BG_COLOR)
 
 # 変数
@@ -722,7 +877,7 @@ title_label.pack(pady=(12, 3))
 
 subtitle_label = tk.Label(
     header_frame,
-    text="キャラ設定と返答ルールを読み込んで会話できるデスクトップアプリ",
+    text="キャラ設定・返答ルール・メモリを使って会話できるデスクトップアプリ",
     font=("Meiryo", 10),
     bg=HEADER_COLOR,
 )
@@ -831,7 +986,7 @@ starter_button = tk.Button(
 )
 starter_button.pack(anchor="w", pady=(10, 0))
 
-# 中央：キャラ情報
+# 中央：キャラ情報・メモリ
 profile_frame = tk.Frame(main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
 profile_frame.pack(side="left", fill="y", padx=(0, 14), ipadx=12, ipady=12)
 
@@ -858,12 +1013,32 @@ personality_preview_text = tk.Text(
     font=("Meiryo", 9),
     wrap="word",
     width=32,
-    height=16,
+    height=10,
     bd=1,
     relief="solid",
     state="disabled",
 )
 personality_preview_text.pack(pady=(0, 10))
+
+memory_title = tk.Label(
+    profile_frame,
+    text="メモリ",
+    font=("Meiryo", 11, "bold"),
+    bg=PANEL_COLOR,
+)
+memory_title.pack(anchor="w", pady=(4, 6))
+
+memory_summary_text = tk.Text(
+    profile_frame,
+    font=("Meiryo", 9),
+    wrap="word",
+    width=32,
+    height=12,
+    bd=1,
+    relief="solid",
+    state="disabled",
+)
+memory_summary_text.pack(pady=(0, 8))
 
 rule_count_label = tk.Label(
     profile_frame,
@@ -890,7 +1065,25 @@ reload_profile_button = tk.Button(
     command=reload_profile,
     width=24,
 )
-reload_profile_button.pack(pady=(0, 8))
+reload_profile_button.pack(pady=(0, 6))
+
+edit_memory_button = tk.Button(
+    profile_frame,
+    text="メモリ編集",
+    font=("Meiryo", 10),
+    command=open_memory_window,
+    width=24,
+)
+edit_memory_button.pack(pady=(0, 6))
+
+reload_memory_button = tk.Button(
+    profile_frame,
+    text="メモリ再読み込み",
+    font=("Meiryo", 10),
+    command=reload_memory,
+    width=24,
+)
+reload_memory_button.pack(pady=(0, 6))
 
 reload_rules_button = tk.Button(
     profile_frame,
@@ -899,7 +1092,7 @@ reload_rules_button = tk.Button(
     command=reload_reply_rules,
     width=24,
 )
-reload_rules_button.pack(pady=(0, 8))
+reload_rules_button.pack(pady=(0, 6))
 
 clear_history_button = tk.Button(
     profile_frame,
@@ -909,20 +1102,6 @@ clear_history_button = tk.Button(
     width=24,
 )
 clear_history_button.pack(pady=(0, 8))
-
-hint_label = tk.Label(
-    profile_frame,
-    text=(
-        "v1.2では返答ルールを画面から編集できます。\n"
-        "返答候補を複数入れるときは、行に --- を置いて区切ります。"
-    ),
-    font=("Meiryo", 8),
-    bg=PANEL_COLOR,
-    fg="#666666",
-    justify="left",
-    wraplength=250,
-)
-hint_label.pack(anchor="w", pady=(8, 0))
 
 # 右側：返答ルール編集
 rules_frame = tk.Frame(main_frame, bg=PANEL_COLOR, bd=1, relief="solid")
@@ -1037,7 +1216,8 @@ rule_hint_label = tk.Label(
     rules_frame,
     text=(
         "例: {user_call}、おつかれさま。\n"
-        "使える変数: {character_name}, {first_person}, {user_call}, {relationship}"
+        "使える変数: {character_name}, {first_person}, {user_call}, {relationship}, "
+        "{current_goal}, {recent_progress}, {memory_topics}"
     ),
     font=("Meiryo", 8),
     bg=PANEL_COLOR,
@@ -1066,11 +1246,12 @@ input_entry.focus_set()
 # 初期表示
 last_saved_rules_snapshot_var.set(make_reply_rules_snapshot())
 update_profile_display()
+update_memory_display()
 refresh_rule_list()
 update_rule_count_label()
 update_rules_status_label()
 refresh_chat_display()
-set_status(f"{profile['character_name']} の設定と返答ルールを読み込みました。")
+set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。")
 
 # アプリ起動
 root.mainloop()
