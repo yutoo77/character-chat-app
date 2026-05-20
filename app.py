@@ -7,7 +7,7 @@ from tkinter import messagebox
 from tkinter import ttk
 
 
-APP_VERSION = "v2.0"
+APP_VERSION = "v2.1"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -542,6 +542,122 @@ def generate_reply(user_message):
         return generate_mock_llm_reply(user_message)
 
     return generate_rule_based_reply(user_message)
+
+def build_llm_prompt(user_message):
+    """
+    将来LLM APIに渡すためのプロンプトを作る。
+
+    v2.1では実際にAPIは呼ばず、
+    キャラ設定・メモリ・直近履歴・ユーザー入力をまとめた
+    プロンプト文字列だけを生成する。
+    """
+    recent_summary = get_recent_chat_summary(limit=6)
+
+    prompt = f"""あなたは「{profile['character_name']}」という会話キャラクターです。
+
+## キャラクター設定
+- 一人称: {profile['first_person']}
+- ユーザーの呼び方: {profile['user_call']}
+- 関係性: {profile['relationship']}
+
+### 性格
+{profile['personality']}
+
+### 話し方
+{profile['speaking_style']}
+
+### 支援スタイル
+{profile['support_style']}
+
+### 避けるべき話し方
+{profile['ng_style']}
+
+## ユーザーメモリ
+- ユーザー名: {memory['user_name']}
+- 現在の目標: {memory['current_goal']}
+- 最近の進捗: {memory['recent_progress']}
+- 好きな話題: {memory['favorite_topics']}
+- メモ:
+{memory['notes']}
+
+## 直近の会話履歴
+{recent_summary}
+
+## 今回のユーザー入力
+{user_message}
+
+## 応答方針
+- キャラクター設定に沿って返答してください。
+- ユーザーの気持ちを受け止めてから返答してください。
+- 必要なときは、優しく現実的に指摘してください。
+- 上辺だけの励ましではなく、根拠や次の一手を示してください。
+- 返答は長すぎず、自然な会話として返してください。
+- ユーザーが行動しやすいように、最後に小さな次の一歩を添えてください。
+
+## キャラクターとしての返答
+"""
+
+    return prompt
+
+def open_llm_prompt_window():
+    """現在の入力内容からLLM用プロンプトを生成して表示する"""
+    user_message = input_var.get().strip()
+
+    if not user_message:
+        user_message = "ここにユーザー入力が入ります。"
+
+    prompt = build_llm_prompt(user_message)
+
+    prompt_window = tk.Toplevel(root)
+    prompt_window.title("LLM用プロンプト確認")
+    prompt_window.geometry("820x720")
+    prompt_window.configure(bg=BG_COLOR)
+
+    frame = create_card(prompt_window)
+    frame.pack(expand=True, fill="both", padx=18, pady=18, ipadx=14, ipady=14)
+
+    create_title_label(frame, "LLM用プロンプト確認").pack(anchor="w", pady=(0, 8))
+
+    description_label = tk.Label(
+        frame,
+        text=(
+            "この画面では、将来LLM APIに渡す予定のプロンプトを確認できます。\n"
+            "v2.1ではAPIは呼ばず、プロンプト生成だけを行います。"
+        ),
+        font=("Meiryo", 9),
+        bg=PANEL_COLOR,
+        fg=SUB_TEXT_COLOR,
+        justify="left",
+    )
+    description_label.pack(anchor="w", pady=(0, 10))
+
+    prompt_text = create_text(frame)
+    prompt_text.pack(expand=True, fill="both", pady=(0, 10))
+    prompt_text.insert("1.0", prompt)
+
+    button_frame = tk.Frame(frame, bg=PANEL_COLOR)
+    button_frame.pack(anchor="w")
+
+    def copy_prompt():
+        prompt_window.clipboard_clear()
+        prompt_window.clipboard_append(prompt_text.get("1.0", "end-1c"))
+        set_status("LLM用プロンプトをクリップボードにコピーしました。")
+        messagebox.showinfo("コピー完了", "LLM用プロンプトをコピーしたよ。")
+
+    create_button(
+        button_frame,
+        "プロンプトをコピー",
+        copy_prompt,
+        width=18,
+    ).grid(row=0, column=0, padx=(0, 8))
+
+    create_button(
+        button_frame,
+        "閉じる",
+        prompt_window.destroy,
+        width=10,
+        kind="secondary",
+    ).grid(row=0, column=1, padx=8)
 
 
 def update_reply_mode_label():
@@ -1255,6 +1371,14 @@ create_button(
     width=20,
     kind="secondary",
 ).pack(anchor="w", pady=(10, 0))
+
+create_button(
+    chat_frame,
+    "LLMプロンプト確認",
+    open_llm_prompt_window,
+    width=20,
+    kind="secondary",
+).pack(anchor="w", pady=(8, 0))
 
 # --------------------
 # キャラ・メモリタブ
