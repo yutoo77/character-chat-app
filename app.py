@@ -7,7 +7,7 @@ from tkinter import messagebox
 from tkinter import ttk
 
 
-APP_VERSION = "v1.6"
+APP_VERSION = "v2.0"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -30,6 +30,14 @@ TEXT_COLOR = "#1f2d3d"
 SUB_TEXT_COLOR = "#5f7484"
 BORDER_COLOR = "#b7dff2"
 INPUT_BG_COLOR = "#fbfdff"
+
+REPLY_MODE_RULE = "rule"
+REPLY_MODE_MOCK_LLM = "mock_llm"
+
+REPLY_MODE_LABELS = {
+    REPLY_MODE_RULE: "ルールベース",
+    REPLY_MODE_MOCK_LLM: "疑似LLM",
+}
 
 
 DEFAULT_PROFILE = {
@@ -449,8 +457,11 @@ def format_reply_template(template):
         return template
 
 
-def generate_character_reply(user_message):
-    """ユーザー入力に対して、reply_rules.jsonのルールで返答を作る"""
+# --------------------
+# Reply engines
+# --------------------
+def generate_rule_based_reply(user_message):
+    """reply_rules.json のルールで返答を作る"""
     message = user_message.lower()
 
     for rule in reply_rules["rules"]:
@@ -462,6 +473,88 @@ def generate_character_reply(user_message):
 
     default_template = random.choice(reply_rules["default_replies"])
     return format_reply_template(default_template)
+
+
+def get_recent_chat_summary(limit=4):
+    """直近の会話を疑似LLM用の短い文脈としてまとめる"""
+    recent_items = chat_history[-limit:]
+
+    if not recent_items:
+        return "まだ会話履歴は少ないです。"
+
+    lines = []
+
+    for item in recent_items:
+        speaker = get_speaker_name(item["role"])
+        message = item["message"].replace("\n", " ")
+        lines.append(f"{speaker}: {message}")
+
+    return "\n".join(lines)
+
+
+def generate_mock_llm_reply(user_message):
+    """
+    LLM APIを使わずに、LLM連携後の流れを疑似的に再現する返答エンジン。
+
+    本物のLLMではないが、
+    - キャラ設定
+    - メモリ
+    - 直近の会話履歴
+    - ルールベース返答
+    を組み合わせることで、将来のLLM接続の形を先に作る。
+    """
+    base_reply = generate_rule_based_reply(user_message)
+    recent_summary = get_recent_chat_summary()
+
+    reflective_parts = [
+        (
+            f"{base_reply}\n\n"
+            f"今の目標は「{memory['current_goal']}」だよね。"
+            f"そこに近づくなら、次は小さく1つだけ進めるのがよさそう。"
+        ),
+        (
+            f"{base_reply}\n\n"
+            f"最近の進捗として「{memory['recent_progress']}」って覚えてるよ。"
+            f"だから、今の一歩もちゃんと積み上げの続きとして見ていいと思う。"
+        ),
+        (
+            f"{base_reply}\n\n"
+            f"直近の流れを見ると、今はこんな感じだね。\n"
+            f"{recent_summary}\n\n"
+            f"ここから一気に広げるより、次の行動を1つに絞ろ。"
+        ),
+    ]
+
+    return random.choice(reflective_parts)
+
+
+def generate_reply(user_message):
+    """
+    返答生成の入口。
+
+    v2.0から、この関数で返答モードを切り替える。
+    将来的にOpenAI APIやローカルLLMを入れる場合も、
+    基本的にはここから呼び出す形にする。
+    """
+    mode = reply_mode_var.get()
+
+    if mode == REPLY_MODE_MOCK_LLM:
+        return generate_mock_llm_reply(user_message)
+
+    return generate_rule_based_reply(user_message)
+
+
+def update_reply_mode_label():
+    """現在の返答モード表示を更新する"""
+    mode = reply_mode_var.get()
+    label = REPLY_MODE_LABELS.get(mode, "不明")
+    reply_mode_status_var.set(f"返答モード: {label}")
+
+
+def on_reply_mode_changed(event=None):
+    """返答モード変更時の処理"""
+    update_reply_mode_label()
+    set_status(f"{reply_mode_status_var.get()} に切り替えました。")
 
 
 def send_message(event=None):
@@ -479,7 +572,7 @@ def send_message(event=None):
 
     updated_fields = update_memory_from_user_message(user_message)
 
-    reply = generate_character_reply(user_message)
+    reply = generate_reply(user_message)
 
     if updated_fields:
         updated_text = "、".join(updated_fields)
@@ -1005,7 +1098,7 @@ chat_history = load_chat_history()
 # アプリのメインウィンドウ
 root = tk.Tk()
 root.title(APP_TITLE)
-root.geometry("1060x760")
+root.geometry("1060x780")
 root.configure(bg=BG_COLOR)
 
 # ttkの見た目を少し整える
@@ -1032,6 +1125,9 @@ style.map(
 # 変数
 input_var = tk.StringVar()
 search_var = tk.StringVar()
+reply_mode_var = tk.StringVar(value=REPLY_MODE_RULE)
+reply_mode_status_var = tk.StringVar(value="返答モード: ルールベース")
+
 status_var = tk.StringVar(value="準備完了")
 profile_summary_var = tk.StringVar()
 count_var = tk.StringVar()
@@ -1095,6 +1191,40 @@ count_label = tk.Label(
     fg=SUB_TEXT_COLOR,
 )
 count_label.pack(side="right")
+
+mode_frame = tk.Frame(chat_frame, bg=PANEL_COLOR)
+mode_frame.pack(fill="x", pady=(0, 10))
+
+create_small_label(mode_frame, "返答モード").pack(side="left", padx=(0, 8))
+
+reply_mode_combobox = ttk.Combobox(
+    mode_frame,
+    textvariable=reply_mode_var,
+    values=[REPLY_MODE_RULE, REPLY_MODE_MOCK_LLM],
+    state="readonly",
+    width=16,
+    font=("Meiryo", 9),
+)
+reply_mode_combobox.pack(side="left")
+reply_mode_combobox.bind("<<ComboboxSelected>>", on_reply_mode_changed)
+
+reply_mode_status_label = tk.Label(
+    mode_frame,
+    textvariable=reply_mode_status_var,
+    font=("Meiryo", 9),
+    bg=PANEL_COLOR,
+    fg=SUB_TEXT_COLOR,
+)
+reply_mode_status_label.pack(side="left", padx=10)
+
+mode_hint_label = tk.Label(
+    mode_frame,
+    text="rule=従来の返答 / mock_llm=LLM連携の疑似モード",
+    font=("Meiryo", 8),
+    bg=PANEL_COLOR,
+    fg=SUB_TEXT_COLOR,
+)
+mode_hint_label.pack(side="left", padx=8)
 
 search_frame = tk.Frame(chat_frame, bg=PANEL_COLOR)
 search_frame.pack(fill="x", pady=(0, 10))
@@ -1299,6 +1429,7 @@ refresh_rule_list()
 update_rule_count_label()
 update_rules_status_label()
 refresh_chat_display()
+update_reply_mode_label()
 set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。")
 
 # アプリ起動
