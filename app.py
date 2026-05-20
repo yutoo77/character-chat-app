@@ -7,7 +7,7 @@ from tkinter import messagebox
 from tkinter import ttk
 
 
-APP_VERSION = "v2.2"
+APP_VERSION = "v2.3"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -692,6 +692,74 @@ def open_llm_prompt_window():
     button_frame = tk.Frame(frame, bg=PANEL_COLOR)
     button_frame.pack(anchor="w")
 
+def open_llm_settings_window():
+    """現在のLLM設定を表示する"""
+    settings_window = tk.Toplevel(root)
+    settings_window.title("LLM設定確認")
+    settings_window.geometry("620x520")
+    settings_window.configure(bg=BG_COLOR)
+
+    frame = create_card(settings_window)
+    frame.pack(expand=True, fill="both", padx=18, pady=18, ipadx=14, ipady=14)
+
+    create_title_label(frame, "LLM設定確認").pack(anchor="w", pady=(0, 8))
+
+    description_label = tk.Label(
+        frame,
+        text=(
+            "現在読み込まれている llm_settings.json の内容です。\n"
+            "v2.3では設定確認と再読み込みのみを行い、API呼び出しはまだ行いません。"
+        ),
+        font=("Meiryo", 9),
+        bg=PANEL_COLOR,
+        fg=SUB_TEXT_COLOR,
+        justify="left",
+    )
+    description_label.pack(anchor="w", pady=(0, 10))
+
+    settings_text = create_text(frame)
+    settings_text.pack(expand=True, fill="both", pady=(0, 10))
+
+    settings_text.insert(
+        "1.0",
+        json.dumps(llm_settings, ensure_ascii=False, indent=2),
+    )
+    settings_text.config(state="disabled")
+
+    button_frame = tk.Frame(frame, bg=PANEL_COLOR)
+    button_frame.pack(anchor="w")
+
+    def copy_settings():
+        settings_window.clipboard_clear()
+        settings_window.clipboard_append(
+            json.dumps(llm_settings, ensure_ascii=False, indent=2)
+        )
+        set_status("LLM設定をクリップボードにコピーしました。")
+        messagebox.showinfo("コピー完了", "LLM設定をコピーしたよ。")
+
+    create_button(
+        button_frame,
+        "設定をコピー",
+        copy_settings,
+        width=14,
+    ).grid(row=0, column=0, padx=(0, 8))
+
+    create_button(
+        button_frame,
+        "再読み込み",
+        reload_llm_settings,
+        width=14,
+        kind="secondary",
+    ).grid(row=0, column=1, padx=8)
+
+    create_button(
+        button_frame,
+        "閉じる",
+        settings_window.destroy,
+        width=10,
+        kind="secondary",
+    ).grid(row=0, column=2, padx=8)
+
     def copy_prompt():
         prompt_window.clipboard_clear()
         prompt_window.clipboard_append(prompt_text.get("1.0", "end-1c"))
@@ -835,6 +903,14 @@ def reload_memory():
     memory = load_memory_from_file()
     update_memory_display()
     set_status("メモリを再読み込みしました。")
+
+def reload_llm_settings():
+    """LLM設定を再読み込みする"""
+    global llm_settings
+
+    llm_settings = load_llm_settings_from_file()
+    set_status("LLM設定を再読み込みしました。")
+    messagebox.showinfo("再読み込み完了", "llm_settings.json を再読み込みしたよ。")
 
 
 def reload_reply_rules():
@@ -1430,6 +1506,14 @@ create_button(
     chat_frame,
     "LLMプロンプト確認",
     open_llm_prompt_window,
+    width=20,
+    kind="secondary",
+).pack(anchor="w", pady=(8, 0))
+
+create_button(
+    chat_frame,
+    "LLM設定確認",
+    open_llm_settings_window,
     width=20,
     kind="secondary",
 ).pack(anchor="w", pady=(8, 0))
