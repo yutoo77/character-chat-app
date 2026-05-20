@@ -7,13 +7,14 @@ from tkinter import messagebox
 from tkinter import ttk
 
 
-APP_VERSION = "v2.1"
+APP_VERSION = "v2.2"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
 HISTORY_FILE = Path("chat_history.json")
 RULES_FILE = Path("reply_rules.json")
 MEMORY_FILE = Path("memory.json")
+LLM_SETTINGS_FILE = Path("llm_settings.json")
 
 # Blue / cyan / white theme
 BG_COLOR = "#eaf7ff"
@@ -90,6 +91,16 @@ DEFAULT_MEMORY = {
     "notes": "一気に完璧を目指さず、小さい機能追加を積み上げる。疲れているときは休憩も前進として扱う。",
 }
 
+DEFAULT_LLM_SETTINGS = {
+    "provider": "mock",
+    "model": "not_set_yet",
+    "reply_engine": "mock_llm",
+    "max_recent_messages": 6,
+    "use_memory": True,
+    "use_chat_history": True,
+    "temperature": 0.7,
+    "notes": "Default local LLM settings.",
+}
 
 def now_text():
     """現在時刻を YYYY-MM-DD HH:MM 形式で返す"""
@@ -237,6 +248,31 @@ def load_memory_from_file():
                 memory_data[key] = str(data[key])
 
     return memory_data
+
+def load_llm_settings_from_file():
+    """llm_settings.json からLLM設定を読み込む"""
+    data = load_json_file(LLM_SETTINGS_FILE, DEFAULT_LLM_SETTINGS.copy())
+    settings = DEFAULT_LLM_SETTINGS.copy()
+
+    if isinstance(data, dict):
+        for key in settings:
+            if key in data:
+                settings[key] = data[key]
+
+    try:
+        settings["max_recent_messages"] = int(settings["max_recent_messages"])
+    except (ValueError, TypeError):
+        settings["max_recent_messages"] = DEFAULT_LLM_SETTINGS["max_recent_messages"]
+
+    try:
+        settings["temperature"] = float(settings["temperature"])
+    except (ValueError, TypeError):
+        settings["temperature"] = DEFAULT_LLM_SETTINGS["temperature"]
+
+    settings["use_memory"] = bool(settings["use_memory"])
+    settings["use_chat_history"] = bool(settings["use_chat_history"])
+
+    return settings
 
 
 def save_memory_to_file():
@@ -547,13 +583,36 @@ def build_llm_prompt(user_message):
     """
     将来LLM APIに渡すためのプロンプトを作る。
 
-    v2.1では実際にAPIは呼ばず、
-    キャラ設定・メモリ・直近履歴・ユーザー入力をまとめた
-    プロンプト文字列だけを生成する。
+    v2.2では llm_settings.json の設定を読み込み、
+    メモリや会話履歴を使うかどうかを設定で切り替えられるようにする。
     """
-    recent_summary = get_recent_chat_summary(limit=6)
+    max_recent_messages = llm_settings["max_recent_messages"]
+
+    if llm_settings["use_chat_history"]:
+        recent_summary = get_recent_chat_summary(limit=max_recent_messages)
+    else:
+        recent_summary = "会話履歴はこのプロンプトでは使用しません。"
+
+    if llm_settings["use_memory"]:
+        memory_block = f"""- ユーザー名: {memory['user_name']}
+- 現在の目標: {memory['current_goal']}
+- 最近の進捗: {memory['recent_progress']}
+- 好きな話題: {memory['favorite_topics']}
+- メモ:
+{memory['notes']}"""
+    else:
+        memory_block = "ユーザーメモリはこのプロンプトでは使用しません。"
 
     prompt = f"""あなたは「{profile['character_name']}」という会話キャラクターです。
+
+## LLM設定
+- provider: {llm_settings['provider']}
+- model: {llm_settings['model']}
+- reply_engine: {llm_settings['reply_engine']}
+- temperature: {llm_settings['temperature']}
+- max_recent_messages: {llm_settings['max_recent_messages']}
+- use_memory: {llm_settings['use_memory']}
+- use_chat_history: {llm_settings['use_chat_history']}
 
 ## キャラクター設定
 - 一人称: {profile['first_person']}
@@ -573,12 +632,7 @@ def build_llm_prompt(user_message):
 {profile['ng_style']}
 
 ## ユーザーメモリ
-- ユーザー名: {memory['user_name']}
-- 現在の目標: {memory['current_goal']}
-- 最近の進捗: {memory['recent_progress']}
-- 好きな話題: {memory['favorite_topics']}
-- メモ:
-{memory['notes']}
+{memory_block}
 
 ## 直近の会話履歴
 {recent_summary}
@@ -1208,8 +1262,8 @@ def create_button(parent, text, command, width=None, kind="primary"):
 profile = load_profile_from_file()
 reply_rules = load_reply_rules_from_file()
 memory = load_memory_from_file()
+llm_settings = load_llm_settings_from_file()
 chat_history = load_chat_history()
-
 
 # アプリのメインウィンドウ
 root = tk.Tk()

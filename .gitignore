@@ -4,3 +4,4 @@ __pycache__/
 character_profile.json
 chat_history.json
 memory.json
+llm_settings.json

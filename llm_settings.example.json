@@ -1,0 +1,10 @@
+{
+  "provider": "mock",
+  "model": "not_set_yet",
+  "reply_engine": "mock_llm",
+  "max_recent_messages": 6,
+  "use_memory": true,
+  "use_chat_history": true,
+  "temperature": 0.7,
+  "notes": "This is an example settings file. Copy this file to llm_settings.json for local use. Do not write API keys in this file."
+}
