@@ -1,4 +1,5 @@
 import json
+import os
 import random
 import tkinter as tk
 from datetime import datetime
@@ -6,8 +7,13 @@ from pathlib import Path
 from tkinter import messagebox
 from tkinter import ttk
 
+try:
+    from openai import OpenAI, OpenAIError
+except ImportError:
+    OpenAI = None
+    OpenAIError = Exception
 
-APP_VERSION = "v2.3"
+APP_VERSION = "v3.0"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -34,10 +40,12 @@ INPUT_BG_COLOR = "#fbfdff"
 
 REPLY_MODE_RULE = "rule"
 REPLY_MODE_MOCK_LLM = "mock_llm"
+REPLY_MODE_OPENAI = "openai"
 
 REPLY_MODE_LABELS = {
     REPLY_MODE_RULE: "ルールベース",
     REPLY_MODE_MOCK_LLM: "疑似LLM",
+    REPLY_MODE_OPENAI: "OpenAI API",
 }
 
 
@@ -91,16 +99,18 @@ DEFAULT_MEMORY = {
     "notes": "一気に完璧を目指さず、小さい機能追加を積み上げる。疲れているときは休憩も前進として扱う。",
 }
 
+
 DEFAULT_LLM_SETTINGS = {
-    "provider": "mock",
-    "model": "not_set_yet",
-    "reply_engine": "mock_llm",
-    "max_recent_messages": 6,
+    "provider": "openai",
+    "model": "gpt-5.4-nano",
+    "reply_engine": "openai",
+    "max_recent_messages": 4,
     "use_memory": True,
     "use_chat_history": True,
     "temperature": 0.7,
     "notes": "Default local LLM settings.",
 }
+
 
 def now_text():
     """現在時刻を YYYY-MM-DD HH:MM 形式で返す"""
@@ -249,6 +259,15 @@ def load_memory_from_file():
 
     return memory_data
 
+
+def save_memory_to_file():
+    """ユーザーメモリを memory.json に保存する"""
+    MEMORY_FILE.write_text(
+        json.dumps(memory, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def load_llm_settings_from_file():
     """llm_settings.json からLLM設定を読み込む"""
     data = load_json_file(LLM_SETTINGS_FILE, DEFAULT_LLM_SETTINGS.copy())
@@ -273,14 +292,6 @@ def load_llm_settings_from_file():
     settings["use_chat_history"] = bool(settings["use_chat_history"])
 
     return settings
-
-
-def save_memory_to_file():
-    """ユーザーメモリを memory.json に保存する"""
-    MEMORY_FILE.write_text(
-        json.dumps(memory, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
 
 
 def normalize_message(raw_message):
@@ -531,13 +542,6 @@ def get_recent_chat_summary(limit=4):
 def generate_mock_llm_reply(user_message):
     """
     LLM APIを使わずに、LLM連携後の流れを疑似的に再現する返答エンジン。
-
-    本物のLLMではないが、
-    - キャラ設定
-    - メモリ
-    - 直近の会話履歴
-    - ルールベース返答
-    を組み合わせることで、将来のLLM接続の形を先に作る。
     """
     base_reply = generate_rule_based_reply(user_message)
     recent_summary = get_recent_chat_summary()
@@ -564,27 +568,9 @@ def generate_mock_llm_reply(user_message):
     return random.choice(reflective_parts)
 
 
-def generate_reply(user_message):
-    """
-    返答生成の入口。
-
-    v2.0から、この関数で返答モードを切り替える。
-    将来的にOpenAI APIやローカルLLMを入れる場合も、
-    基本的にはここから呼び出す形にする。
-    """
-    mode = reply_mode_var.get()
-
-    if mode == REPLY_MODE_MOCK_LLM:
-        return generate_mock_llm_reply(user_message)
-
-    return generate_rule_based_reply(user_message)
-
 def build_llm_prompt(user_message):
     """
     将来LLM APIに渡すためのプロンプトを作る。
-
-    v2.2では llm_settings.json の設定を読み込み、
-    メモリや会話履歴を使うかどうかを設定で切り替えられるようにする。
     """
     max_recent_messages = llm_settings["max_recent_messages"]
 
@@ -653,133 +639,67 @@ def build_llm_prompt(user_message):
 
     return prompt
 
-def open_llm_prompt_window():
-    """現在の入力内容からLLM用プロンプトを生成して表示する"""
-    user_message = input_var.get().strip()
 
-    if not user_message:
-        user_message = "ここにユーザー入力が入ります。"
+def generate_openai_reply(user_message):
+    """OpenAI APIを使ってキャラ返答を生成する"""
+    if OpenAI is None:
+        return (
+            "OpenAI SDKがインストールされていないみたいです。\n"
+            "PowerShellで `py -3.14 -m pip install openai` を実行してね。"
+        )
+
+    if not os.getenv("OPENAI_API_KEY"):
+        return (
+            "OPENAI_API_KEY が設定されていないみたいです。\n"
+            "APIキーを環境変数に設定してから、PowerShellを開き直してね。"
+        )
 
     prompt = build_llm_prompt(user_message)
+    model = str(llm_settings.get("model", "gpt-5.4-nano"))
 
-    prompt_window = tk.Toplevel(root)
-    prompt_window.title("LLM用プロンプト確認")
-    prompt_window.geometry("820x720")
-    prompt_window.configure(bg=BG_COLOR)
+    try:
+        client = OpenAI()
 
-    frame = create_card(prompt_window)
-    frame.pack(expand=True, fill="both", padx=18, pady=18, ipadx=14, ipady=14)
-
-    create_title_label(frame, "LLM用プロンプト確認").pack(anchor="w", pady=(0, 8))
-
-    description_label = tk.Label(
-        frame,
-        text=(
-            "この画面では、将来LLM APIに渡す予定のプロンプトを確認できます。\n"
-            "v2.1ではAPIは呼ばず、プロンプト生成だけを行います。"
-        ),
-        font=("Meiryo", 9),
-        bg=PANEL_COLOR,
-        fg=SUB_TEXT_COLOR,
-        justify="left",
-    )
-    description_label.pack(anchor="w", pady=(0, 10))
-
-    prompt_text = create_text(frame)
-    prompt_text.pack(expand=True, fill="both", pady=(0, 10))
-    prompt_text.insert("1.0", prompt)
-
-    button_frame = tk.Frame(frame, bg=PANEL_COLOR)
-    button_frame.pack(anchor="w")
-
-def open_llm_settings_window():
-    """現在のLLM設定を表示する"""
-    settings_window = tk.Toplevel(root)
-    settings_window.title("LLM設定確認")
-    settings_window.geometry("620x520")
-    settings_window.configure(bg=BG_COLOR)
-
-    frame = create_card(settings_window)
-    frame.pack(expand=True, fill="both", padx=18, pady=18, ipadx=14, ipady=14)
-
-    create_title_label(frame, "LLM設定確認").pack(anchor="w", pady=(0, 8))
-
-    description_label = tk.Label(
-        frame,
-        text=(
-            "現在読み込まれている llm_settings.json の内容です。\n"
-            "v2.3では設定確認と再読み込みのみを行い、API呼び出しはまだ行いません。"
-        ),
-        font=("Meiryo", 9),
-        bg=PANEL_COLOR,
-        fg=SUB_TEXT_COLOR,
-        justify="left",
-    )
-    description_label.pack(anchor="w", pady=(0, 10))
-
-    settings_text = create_text(frame)
-    settings_text.pack(expand=True, fill="both", pady=(0, 10))
-
-    settings_text.insert(
-        "1.0",
-        json.dumps(llm_settings, ensure_ascii=False, indent=2),
-    )
-    settings_text.config(state="disabled")
-
-    button_frame = tk.Frame(frame, bg=PANEL_COLOR)
-    button_frame.pack(anchor="w")
-
-    def copy_settings():
-        settings_window.clipboard_clear()
-        settings_window.clipboard_append(
-            json.dumps(llm_settings, ensure_ascii=False, indent=2)
+        response = client.responses.create(
+            model=model,
+            input=prompt,
         )
-        set_status("LLM設定をクリップボードにコピーしました。")
-        messagebox.showinfo("コピー完了", "LLM設定をコピーしたよ。")
 
-    create_button(
-        button_frame,
-        "設定をコピー",
-        copy_settings,
-        width=14,
-    ).grid(row=0, column=0, padx=(0, 8))
+        reply = response.output_text.strip()
 
-    create_button(
-        button_frame,
-        "再読み込み",
-        reload_llm_settings,
-        width=14,
-        kind="secondary",
-    ).grid(row=0, column=1, padx=8)
+        if not reply:
+            return "OpenAI APIから空の返答が返ってきました。"
 
-    create_button(
-        button_frame,
-        "閉じる",
-        settings_window.destroy,
-        width=10,
-        kind="secondary",
-    ).grid(row=0, column=2, padx=8)
+        return reply
 
-    def copy_prompt():
-        prompt_window.clipboard_clear()
-        prompt_window.clipboard_append(prompt_text.get("1.0", "end-1c"))
-        set_status("LLM用プロンプトをクリップボードにコピーしました。")
-        messagebox.showinfo("コピー完了", "LLM用プロンプトをコピーしたよ。")
+    except OpenAIError as error:
+        return (
+            "OpenAI APIの呼び出しでエラーが出ました。\n"
+            f"{error}"
+        )
+    except Exception as error:
+        return (
+            "予期しないエラーが出ました。\n"
+            f"{error}"
+        )
 
-    create_button(
-        button_frame,
-        "プロンプトをコピー",
-        copy_prompt,
-        width=18,
-    ).grid(row=0, column=0, padx=(0, 8))
 
-    create_button(
-        button_frame,
-        "閉じる",
-        prompt_window.destroy,
-        width=10,
-        kind="secondary",
-    ).grid(row=0, column=1, padx=8)
+def generate_reply(user_message):
+    """
+    返答生成の入口。
+
+    v3.0では openai モードを追加し、
+    build_llm_prompt() で作ったプロンプトをOpenAI APIに渡せるようにする。
+    """
+    mode = reply_mode_var.get()
+
+    if mode == REPLY_MODE_OPENAI:
+        return generate_openai_reply(user_message)
+
+    if mode == REPLY_MODE_MOCK_LLM:
+        return generate_mock_llm_reply(user_message)
+
+    return generate_rule_based_reply(user_message)
 
 
 def update_reply_mode_label():
@@ -903,6 +823,7 @@ def reload_memory():
     memory = load_memory_from_file()
     update_memory_display()
     set_status("メモリを再読み込みしました。")
+
 
 def reload_llm_settings():
     """LLM設定を再読み込みする"""
@@ -1213,6 +1134,136 @@ def open_memory_window():
     create_button(button_frame, "閉じる", memory_window.destroy, width=10, kind="secondary").grid(row=0, column=1, padx=5)
 
 
+def open_llm_prompt_window():
+    """現在の入力内容からLLM用プロンプトを生成して表示する"""
+    user_message = input_var.get().strip()
+
+    if not user_message:
+        user_message = "ここにユーザー入力が入ります。"
+
+    prompt = build_llm_prompt(user_message)
+
+    prompt_window = tk.Toplevel(root)
+    prompt_window.title("LLM用プロンプト確認")
+    prompt_window.geometry("820x720")
+    prompt_window.configure(bg=BG_COLOR)
+
+    frame = create_card(prompt_window)
+    frame.pack(expand=True, fill="both", padx=18, pady=18, ipadx=14, ipady=14)
+
+    create_title_label(frame, "LLM用プロンプト確認").pack(anchor="w", pady=(0, 8))
+
+    description_label = tk.Label(
+        frame,
+        text=(
+            "この画面では、LLM APIに渡す予定のプロンプトを確認できます。\n"
+            "v3.0では、このプロンプトをOpenAI APIに渡して返答を生成できます。"
+        ),
+        font=("Meiryo", 9),
+        bg=PANEL_COLOR,
+        fg=SUB_TEXT_COLOR,
+        justify="left",
+    )
+    description_label.pack(anchor="w", pady=(0, 10))
+
+    prompt_text = create_text(frame)
+    prompt_text.pack(expand=True, fill="both", pady=(0, 10))
+    prompt_text.insert("1.0", prompt)
+
+    button_frame = tk.Frame(frame, bg=PANEL_COLOR)
+    button_frame.pack(anchor="w")
+
+    def copy_prompt():
+        prompt_window.clipboard_clear()
+        prompt_window.clipboard_append(prompt_text.get("1.0", "end-1c"))
+        set_status("LLM用プロンプトをクリップボードにコピーしました。")
+        messagebox.showinfo("コピー完了", "LLM用プロンプトをコピーしたよ。")
+
+    create_button(
+        button_frame,
+        "プロンプトをコピー",
+        copy_prompt,
+        width=18,
+    ).grid(row=0, column=0, padx=(0, 8))
+
+    create_button(
+        button_frame,
+        "閉じる",
+        prompt_window.destroy,
+        width=10,
+        kind="secondary",
+    ).grid(row=0, column=1, padx=8)
+
+
+def open_llm_settings_window():
+    """現在のLLM設定を表示する"""
+    settings_window = tk.Toplevel(root)
+    settings_window.title("LLM設定確認")
+    settings_window.geometry("620x520")
+    settings_window.configure(bg=BG_COLOR)
+
+    frame = create_card(settings_window)
+    frame.pack(expand=True, fill="both", padx=18, pady=18, ipadx=14, ipady=14)
+
+    create_title_label(frame, "LLM設定確認").pack(anchor="w", pady=(0, 8))
+
+    description_label = tk.Label(
+        frame,
+        text=(
+            "現在読み込まれている llm_settings.json の内容です。\n"
+            "APIキーはここには保存せず、環境変数 OPENAI_API_KEY から読み込みます。"
+        ),
+        font=("Meiryo", 9),
+        bg=PANEL_COLOR,
+        fg=SUB_TEXT_COLOR,
+        justify="left",
+    )
+    description_label.pack(anchor="w", pady=(0, 10))
+
+    settings_text = create_text(frame)
+    settings_text.pack(expand=True, fill="both", pady=(0, 10))
+
+    settings_text.insert(
+        "1.0",
+        json.dumps(llm_settings, ensure_ascii=False, indent=2),
+    )
+    settings_text.config(state="disabled")
+
+    button_frame = tk.Frame(frame, bg=PANEL_COLOR)
+    button_frame.pack(anchor="w")
+
+    def copy_settings():
+        settings_window.clipboard_clear()
+        settings_window.clipboard_append(
+            json.dumps(llm_settings, ensure_ascii=False, indent=2)
+        )
+        set_status("LLM設定をクリップボードにコピーしました。")
+        messagebox.showinfo("コピー完了", "LLM設定をコピーしたよ。")
+
+    create_button(
+        button_frame,
+        "設定をコピー",
+        copy_settings,
+        width=14,
+    ).grid(row=0, column=0, padx=(0, 8))
+
+    create_button(
+        button_frame,
+        "再読み込み",
+        reload_llm_settings,
+        width=14,
+        kind="secondary",
+    ).grid(row=0, column=1, padx=8)
+
+    create_button(
+        button_frame,
+        "閉じる",
+        settings_window.destroy,
+        width=10,
+        kind="secondary",
+    ).grid(row=0, column=2, padx=8)
+
+
 def on_close():
     """アプリ終了時の処理"""
     if has_unsaved_rule_changes():
@@ -1341,6 +1392,7 @@ memory = load_memory_from_file()
 llm_settings = load_llm_settings_from_file()
 chat_history = load_chat_history()
 
+
 # アプリのメインウィンドウ
 root = tk.Tk()
 root.title(APP_TITLE)
@@ -1399,7 +1451,7 @@ title_label.pack(pady=(13, 3))
 
 subtitle_label = tk.Label(
     header_frame,
-    text="キャラ設定・返答ルール・メモリを使って会話できるデスクトップアプリ",
+    text="キャラ設定・返答ルール・メモリ・OpenAI APIを使って会話できるデスクトップアプリ",
     font=("Meiryo", 10),
     bg=HEADER_COLOR,
     fg=SUB_TEXT_COLOR,
@@ -1446,7 +1498,7 @@ create_small_label(mode_frame, "返答モード").pack(side="left", padx=(0, 8))
 reply_mode_combobox = ttk.Combobox(
     mode_frame,
     textvariable=reply_mode_var,
-    values=[REPLY_MODE_RULE, REPLY_MODE_MOCK_LLM],
+    values=[REPLY_MODE_RULE, REPLY_MODE_MOCK_LLM, REPLY_MODE_OPENAI],
     state="readonly",
     width=16,
     font=("Meiryo", 9),
@@ -1465,7 +1517,7 @@ reply_mode_status_label.pack(side="left", padx=10)
 
 mode_hint_label = tk.Label(
     mode_frame,
-    text="rule=従来の返答 / mock_llm=LLM連携の疑似モード",
+    text="rule=従来の返答 / mock_llm=疑似LLM / openai=OpenAI API",
     font=("Meiryo", 8),
     bg=PANEL_COLOR,
     fg=SUB_TEXT_COLOR,
