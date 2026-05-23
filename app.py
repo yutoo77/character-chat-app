@@ -26,7 +26,7 @@ except ImportError:
     ImageTk = None
 
 
-APP_VERSION = "v4.0"
+APP_VERSION = "v4.1"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -182,6 +182,15 @@ def load_profile_from_file():
                 profile_data[key] = str(data[key])
 
     return profile_data
+
+
+
+def save_profile_to_file():
+    """キャラ設定を character_profile.json に保存する"""
+    PROFILE_FILE.write_text(
+        json.dumps(profile, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def normalize_reply_rule(raw_rule):
@@ -1347,6 +1356,110 @@ def save_reply_rules():
     messagebox.showinfo("保存完了", "返答ルールを保存したよ。")
 
 
+def open_profile_editor_window():
+    """キャラ設定編集ウィンドウを開く"""
+    profile_window = tk.Toplevel(root)
+    profile_window.title("キャラ設定編集")
+    profile_window.geometry("780x760")
+    profile_window.configure(bg=BG_COLOR)
+
+    editor_frame = create_card(profile_window)
+    editor_frame.pack(expand=True, fill="both", padx=18, pady=18, ipadx=14, ipady=14)
+
+    create_title_label(editor_frame, "キャラ設定編集").pack(anchor="w", pady=(0, 8))
+
+    description_label = tk.Label(
+        editor_frame,
+        text=(
+            "キャラ名・一人称・ユーザーの呼び方・性格・話し方などを編集できます。"
+            "保存すると character_profile.json に反映され、OpenAIプロンプトにも使われます。"
+        ),
+        font=("Meiryo", 9),
+        bg=PANEL_COLOR,
+        fg=SUB_TEXT_COLOR,
+        justify="left",
+        wraplength=700,
+    )
+    description_label.pack(anchor="w", pady=(0, 12))
+
+    name_var = tk.StringVar(value=profile["character_name"])
+    first_person_var = tk.StringVar(value=profile["first_person"])
+    user_call_var = tk.StringVar(value=profile["user_call"])
+    relationship_var = tk.StringVar(value=profile["relationship"])
+
+    basic_frame = tk.Frame(editor_frame, bg=PANEL_COLOR)
+    basic_frame.pack(fill="x", pady=(0, 8))
+
+    def add_basic_field(row, column, label_text, variable, width=30):
+        field_frame = tk.Frame(basic_frame, bg=PANEL_COLOR)
+        field_frame.grid(row=row, column=column, sticky="ew", padx=(0, 12), pady=(0, 8))
+
+        create_small_label(field_frame, label_text).pack(anchor="w")
+        entry = create_entry(field_frame, variable)
+        entry.config(width=width)
+        entry.pack(fill="x", pady=(2, 0))
+        return entry
+
+    basic_frame.columnconfigure(0, weight=1)
+    basic_frame.columnconfigure(1, weight=1)
+
+    add_basic_field(0, 0, "キャラ名", name_var)
+    add_basic_field(0, 1, "一人称", first_person_var)
+    add_basic_field(1, 0, "ユーザーの呼び方", user_call_var)
+    add_basic_field(1, 1, "関係性", relationship_var)
+
+    def add_text_area(label_text, initial_text, height):
+        create_small_label(editor_frame, label_text).pack(anchor="w", pady=(4, 0))
+        text_widget = create_text(editor_frame, height=height)
+        text_widget.pack(fill="x", pady=(2, 6))
+        text_widget.insert("1.0", initial_text)
+        return text_widget
+
+    personality_text = add_text_area("性格", profile["personality"], 4)
+    speaking_style_text = add_text_area("話し方", profile["speaking_style"], 4)
+    support_style_text = add_text_area("支援スタイル", profile["support_style"], 4)
+    favorite_topics_text = add_text_area("好きな話題・得意な話題", profile["favorite_topics"], 3)
+    ng_style_text = add_text_area("避けるべき話し方", profile["ng_style"], 3)
+    sample_lines_text = add_text_area("サンプル台詞", profile["sample_lines"], 5)
+
+    def save_profile_from_window():
+        global profile
+
+        new_profile = DEFAULT_PROFILE.copy()
+        new_profile.update(
+            {
+                "character_name": name_var.get().strip() or DEFAULT_PROFILE["character_name"],
+                "first_person": first_person_var.get().strip() or DEFAULT_PROFILE["first_person"],
+                "user_call": user_call_var.get().strip() or DEFAULT_PROFILE["user_call"],
+                "relationship": relationship_var.get().strip() or DEFAULT_PROFILE["relationship"],
+                "personality": personality_text.get("1.0", "end-1c").strip() or DEFAULT_PROFILE["personality"],
+                "speaking_style": speaking_style_text.get("1.0", "end-1c").strip() or DEFAULT_PROFILE["speaking_style"],
+                "support_style": support_style_text.get("1.0", "end-1c").strip() or DEFAULT_PROFILE["support_style"],
+                "favorite_topics": favorite_topics_text.get("1.0", "end-1c").strip() or DEFAULT_PROFILE["favorite_topics"],
+                "ng_style": ng_style_text.get("1.0", "end-1c").strip() or DEFAULT_PROFILE["ng_style"],
+                "sample_lines": sample_lines_text.get("1.0", "end-1c").strip() or DEFAULT_PROFILE["sample_lines"],
+            }
+        )
+
+        profile = new_profile
+        save_profile_to_file()
+        update_profile_display()
+        refresh_chat_display()
+
+        set_status("キャラ設定を character_profile.json に保存しました。")
+        messagebox.showinfo(
+            "保存完了",
+            "キャラ設定を保存したよ。\n次の返答からOpenAIプロンプトにも反映されます。",
+        )
+
+    button_frame = tk.Frame(editor_frame, bg=PANEL_COLOR)
+    button_frame.pack(anchor="w", pady=(8, 0))
+
+    create_button(button_frame, "保存", save_profile_from_window, width=12).grid(row=0, column=0, padx=(0, 8))
+    create_button(button_frame, "再読み込み", reload_profile, width=12, kind="secondary").grid(row=0, column=1, padx=8)
+    create_button(button_frame, "閉じる", profile_window.destroy, width=12, kind="secondary").grid(row=0, column=2, padx=8)
+
+
 def open_memory_window():
     """メモリ編集ウィンドウを開く"""
     memory_window = tk.Toplevel(root)
@@ -2405,7 +2518,7 @@ title_label.pack(pady=(13, 3))
 
 subtitle_label = tk.Label(
     header_frame,
-    text="キャラ設定・メモリ・OpenAI API・安定した音声読み上げを使って会話できるデスクトップアプリ",
+    text="キャラ設定編集・メモリ・OpenAI API・VOICEVOX・キャラクター表示つき相棒アプリ",
     font=("Meiryo", 10),
     bg=HEADER_COLOR,
     fg=SUB_TEXT_COLOR,
@@ -2697,13 +2810,23 @@ profile_summary_label.pack(anchor="w", pady=(0, 10))
 personality_preview_text = create_text(character_frame, height=18, state="disabled")
 personality_preview_text.pack(expand=True, fill="both", pady=(0, 10))
 
+character_button_frame = tk.Frame(character_frame, bg=PANEL_COLOR)
+character_button_frame.pack(anchor="w", pady=(0, 6))
+
 create_button(
-    character_frame,
-    "キャラ設定を再読み込み",
+    character_button_frame,
+    "キャラ設定編集",
+    open_profile_editor_window,
+    width=14,
+).grid(row=0, column=0, padx=(0, 8))
+
+create_button(
+    character_button_frame,
+    "再読み込み",
     reload_profile,
-    width=24,
+    width=12,
     kind="secondary",
-).pack(anchor="w", pady=(0, 6))
+).grid(row=0, column=1, padx=8)
 
 memory_frame = create_card(profile_main_frame)
 memory_frame.pack(side="left", expand=True, fill="both", ipadx=14, ipady=14)
@@ -3001,6 +3124,7 @@ overview_text = """主な機能
 
 1. キャラクター会話
 - character_profile.json からキャラクター設定を読み込みます。
+- キャラ設定編集UIから、キャラ名・一人称・ユーザーの呼び方・性格などを編集できます。
 - 返答モードは rule / mock_llm / openai を切り替えられます。
 - OpenAI APIを使うと、キャラ設定・メモリ・直近履歴を反映した返答を生成します。
 
@@ -3080,7 +3204,7 @@ update_rules_status_label()
 refresh_chat_display()
 update_reply_mode_label()
 load_character_image("normal")
-set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。v4.0として成果物表示を整理しました。")
+set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。キャラ設定編集に対応しました。")
 
 # アプリ起動
 root.mainloop()
