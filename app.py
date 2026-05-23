@@ -1,6 +1,9 @@
 import json
 import os
 import random
+import subprocess
+import tempfile
+import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +17,7 @@ except ImportError:
     OpenAIError = Exception
 
 
-APP_VERSION = "v3.1"
+APP_VERSION = "v3.2"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -809,6 +812,11 @@ def send_message(event=None):
         reply += f"\n\nちなみに、{updated_text}をメモリに残しておいたよ。"
 
     add_message("character", reply)
+    set_latest_character_reply(reply)
+
+    if auto_speak_var.get():
+        set_status("キャラ返答を自動読み上げしています。")
+        speak_text_async(reply)
 
     if updated_fields:
         set_status(f"メモリを更新しました: {', '.join(updated_fields)}")
@@ -828,7 +836,13 @@ def add_starter_message():
     search_var.set("")
     message = format_reply_template(random.choice(starters))
     add_message("character", message)
-    set_status("キャラから話しかけました。")
+    set_latest_character_reply(message)
+
+    if auto_speak_var.get():
+        set_status("キャラ返答を自動読み上げしています。")
+        speak_text_async(message)
+    else:
+        set_status("キャラから話しかけました。")
 
 
 def clear_input():
@@ -1229,7 +1243,7 @@ def open_llm_prompt_window():
         frame,
         text=(
             "この画面では、OpenAI APIに渡すプロンプトを確認できます。\n"
-            "v3.1では、短めで音声化しやすい返答になるようにプロンプトを調整しています。"
+            "v3.2では、短めで音声読み上げしやすい返答になるようにプロンプトを調整しています。"
         ),
         font=("Meiryo", 9),
         bg=PANEL_COLOR,
@@ -1334,6 +1348,122 @@ def open_llm_settings_window():
         width=10,
         kind="secondary",
     ).grid(row=0, column=2, padx=8)
+
+
+def clean_text_for_speech(text):
+    """読み上げ用にテキストを軽く整える"""
+    cleaned = str(text).strip()
+
+    # 長すぎる読み上げを防ぐ
+    max_chars = 600
+    if len(cleaned) > max_chars:
+        cleaned = cleaned[:max_chars] + "。"
+
+    return cleaned
+
+
+def set_latest_character_reply(message):
+    """最新のキャラ返答を保持する"""
+    global latest_character_reply
+
+    latest_character_reply = str(message).strip()
+
+
+def set_status_from_thread(message):
+    """別スレッドから安全にステータスを更新する"""
+    root.after(0, lambda: set_status(message))
+
+
+def speak_text_worker(text):
+    """
+    Windows標準のSystem.Speechを使って読み上げる。
+    将来的にVOICEVOXなどへ差し替える場合も、この関数群を置き換える方針にする。
+    """
+    speech_text = clean_text_for_speech(text)
+
+    if not speech_text:
+        set_status_from_thread("読み上げるテキストがありません。")
+        return
+
+    if os.name != "nt":
+        set_status_from_thread("現在の読み上げ機能はWindows環境のみ対応です。")
+        return
+
+    temp_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".txt",
+            delete=False,
+        ) as temp_file:
+            temp_file.write(speech_text)
+            temp_path = temp_file.name
+
+        powershell_script = r"""
+& {
+    param($textPath)
+
+    Add-Type -AssemblyName System.Speech
+    $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+    $synth.Rate = 0
+    $synth.Volume = 100
+    $text = Get-Content -Raw -Encoding UTF8 $textPath
+    $synth.Speak($text)
+}
+"""
+
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                powershell_script,
+                temp_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+
+        if result.returncode == 0:
+            set_status_from_thread("読み上げが完了しました。")
+        else:
+            error_message = result.stderr.strip() or "読み上げに失敗しました。"
+            set_status_from_thread(f"読み上げエラー: {error_message}")
+
+    except subprocess.TimeoutExpired:
+        set_status_from_thread("読み上げがタイムアウトしました。")
+    except Exception as error:
+        set_status_from_thread(f"読み上げ中にエラーが出ました: {error}")
+    finally:
+        if temp_path:
+            try:
+                Path(temp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def speak_text_async(text):
+    """読み上げを別スレッドで実行する"""
+    threading.Thread(
+        target=speak_text_worker,
+        args=(text,),
+        daemon=True,
+    ).start()
+
+
+def speak_latest_reply():
+    """最新のキャラ返答を読み上げる"""
+    if not latest_character_reply:
+        messagebox.showinfo("読み上げなし", "まだ読み上げるキャラ返答がありません。")
+        return
+
+    set_status("最新のキャラ返答を読み上げています。")
+    speak_text_async(latest_character_reply)
 
 
 def on_close():
@@ -1487,6 +1617,8 @@ style.map(
 # 変数
 input_var = tk.StringVar()
 search_var = tk.StringVar()
+auto_speak_var = tk.BooleanVar(value=False)
+latest_character_reply = ""
 reply_mode_var = tk.StringVar(value=REPLY_MODE_RULE)
 reply_mode_status_var = tk.StringVar(value="返答モード: ルールベース")
 
@@ -1515,7 +1647,7 @@ title_label.pack(pady=(13, 3))
 
 subtitle_label = tk.Label(
     header_frame,
-    text="キャラ設定・メモリ・OpenAI APIを使って、短く自然に会話できるデスクトップアプリ",
+    text="キャラ設定・メモリ・OpenAI API・音声読み上げを使って会話できるデスクトップアプリ",
     font=("Meiryo", 10),
     bg=HEADER_COLOR,
     fg=SUB_TEXT_COLOR,
@@ -1585,6 +1717,41 @@ mode_hint_label = tk.Label(
     fg=SUB_TEXT_COLOR,
 )
 mode_hint_label.pack(side="left", padx=8)
+
+
+speech_frame = tk.Frame(chat_frame, bg=PANEL_COLOR)
+speech_frame.pack(fill="x", pady=(0, 10))
+
+auto_speak_check = tk.Checkbutton(
+    speech_frame,
+    text="自動読み上げ",
+    variable=auto_speak_var,
+    font=("Meiryo", 9),
+    bg=PANEL_COLOR,
+    fg=TEXT_COLOR,
+    activebackground=PANEL_COLOR,
+    activeforeground=TEXT_COLOR,
+    selectcolor=PANEL_SOFT_COLOR,
+)
+auto_speak_check.pack(side="left", padx=(0, 8))
+
+create_button(
+    speech_frame,
+    "最新返答を読み上げ",
+    speak_latest_reply,
+    width=18,
+    kind="secondary",
+).pack(side="left", padx=4)
+
+speech_hint_label = tk.Label(
+    speech_frame,
+    text="Windows標準音声で読み上げます",
+    font=("Meiryo", 8),
+    bg=PANEL_COLOR,
+    fg=SUB_TEXT_COLOR,
+)
+speech_hint_label.pack(side="left", padx=8)
+
 
 search_frame = tk.Frame(chat_frame, bg=PANEL_COLOR)
 search_frame.pack(fill="x", pady=(0, 10))
