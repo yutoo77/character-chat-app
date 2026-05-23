@@ -26,7 +26,7 @@ except ImportError:
     ImageTk = None
 
 
-APP_VERSION = "v3.8"
+APP_VERSION = "v3.9"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -472,10 +472,97 @@ def message_matches_search(item, keyword):
     return keyword in speaker or keyword in message or keyword in timestamp
 
 
+def configure_chat_text_tags():
+    """チャット欄の見た目用タグを設定する"""
+    chat_text.tag_configure(
+        "user_header",
+        font=("Meiryo", 9, "bold"),
+        foreground=ACCENT_DARK_COLOR,
+        spacing1=8,
+        spacing3=2,
+    )
+    chat_text.tag_configure(
+        "character_header",
+        font=("Meiryo", 9, "bold"),
+        foreground="#4f6f8f",
+        spacing1=8,
+        spacing3=2,
+    )
+    chat_text.tag_configure(
+        "timestamp",
+        font=("Meiryo", 8),
+        foreground=SUB_TEXT_COLOR,
+    )
+    chat_text.tag_configure(
+        "user_message",
+        font=("Meiryo", 10),
+        foreground=TEXT_COLOR,
+        background="#e7f4fb",
+        lmargin1=18,
+        lmargin2=18,
+        rmargin=18,
+        spacing1=3,
+        spacing3=5,
+    )
+    chat_text.tag_configure(
+        "character_message",
+        font=("Meiryo", 10),
+        foreground=TEXT_COLOR,
+        background="#f7fcff",
+        lmargin1=18,
+        lmargin2=18,
+        rmargin=18,
+        spacing1=3,
+        spacing3=5,
+    )
+    chat_text.tag_configure(
+        "system_gap",
+        spacing1=2,
+        spacing3=6,
+    )
+
+
+def insert_chat_message(item):
+    """チャット欄に1件の発言を見やすく挿入する"""
+    role = item["role"]
+    speaker = get_speaker_name(role)
+    timestamp = item.get("timestamp", "")
+    message = item["message"]
+
+    if role == "user":
+        header_tag = "user_header"
+        message_tag = "user_message"
+        speaker_prefix = "You"
+    else:
+        header_tag = "character_header"
+        message_tag = "character_message"
+        speaker_prefix = "Character"
+
+    chat_text.insert(tk.END, f"{speaker_prefix}: {speaker}", header_tag)
+
+    if timestamp:
+        chat_text.insert(tk.END, f"  {timestamp}", "timestamp")
+
+    chat_text.insert(tk.END, "\n")
+
+    lines = message.splitlines()
+    if not lines:
+        lines = [""]
+
+    for line in lines:
+        if line.strip():
+            chat_text.insert(tk.END, f"  {line}\n", message_tag)
+        else:
+            chat_text.insert(tk.END, "\n", message_tag)
+
+    chat_text.insert(tk.END, "\n", "system_gap")
+
+
 def refresh_chat_display():
     """会話履歴を画面に表示し直す"""
     chat_text.config(state="normal")
     chat_text.delete("1.0", tk.END)
+    configure_chat_text_tags()
 
     keyword = search_var.get().strip()
     visible_count = 0
@@ -484,16 +571,22 @@ def refresh_chat_display():
         if not message_matches_search(item, keyword):
             continue
 
-        speaker = get_speaker_name(item["role"])
-        timestamp = item.get("timestamp", "")
-
-        if timestamp:
-            chat_text.insert(tk.END, f"{speaker} ({timestamp})\n")
-        else:
-            chat_text.insert(tk.END, f"{speaker}\n")
-
-        chat_text.insert(tk.END, f"{item['message']}\n\n")
+        insert_chat_message(item)
         visible_count += 1
+
+    if visible_count == 0:
+        if keyword:
+            chat_text.insert(
+                tk.END,
+                f"検索キーワード「{keyword}」に一致する会話はありません。\n",
+                "timestamp",
+            )
+        else:
+            chat_text.insert(
+                tk.END,
+                "まだ会話履歴はありません。下の入力欄から話しかけてみてね。\n",
+                "timestamp",
+            )
 
     chat_text.see(tk.END)
     chat_text.config(state="disabled")
@@ -2524,7 +2617,23 @@ create_button(search_frame, "履歴検索", search_history, width=10, kind="seco
 create_button(search_frame, "検索クリア", clear_search, width=10, kind="secondary").pack(side="left", padx=4)
 
 chat_text = create_text(chat_frame, state="disabled")
+chat_text.config(
+    bg="#fbfdff",
+    relief="flat",
+    bd=0,
+    padx=10,
+    pady=10,
+)
 chat_text.pack(expand=True, fill="both", pady=(0, 10))
+
+input_hint_label = tk.Label(
+    chat_frame,
+    text="メッセージを入力してEnter、または送信ボタンで会話できます。",
+    font=("Meiryo", 8),
+    bg=PANEL_COLOR,
+    fg=SUB_TEXT_COLOR,
+)
+input_hint_label.pack(anchor="w", pady=(0, 4))
 
 input_frame = tk.Frame(chat_frame, bg=PANEL_COLOR)
 input_frame.pack(fill="x")
@@ -2876,7 +2985,7 @@ update_rules_status_label()
 refresh_chat_display()
 update_reply_mode_label()
 load_character_image("normal")
-set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。表情差分表示に対応しました。")
+set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。チャットUIを改善しました。")
 
 # アプリ起動
 root.mainloop()
