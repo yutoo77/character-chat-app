@@ -26,7 +26,7 @@ except ImportError:
     ImageTk = None
 
 
-APP_VERSION = "v4.1"
+APP_VERSION = "v4.2"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -1461,42 +1461,122 @@ def open_profile_editor_window():
 
 
 def open_memory_window():
-    """メモリ編集ウィンドウを開く"""
+    """ユーザー設定・メモリ編集ウィンドウを開く"""
     memory_window = tk.Toplevel(root)
-    memory_window.title("メモリ編集")
-    memory_window.geometry("700x620")
+    memory_window.title("ユーザー設定・メモリ編集")
+    memory_window.geometry("780x760")
     memory_window.configure(bg=BG_COLOR)
 
     user_name_var = tk.StringVar(value=memory["user_name"])
     current_goal_var = tk.StringVar(value=memory["current_goal"])
+    sync_user_call_var = tk.BooleanVar(value=False)
 
     frame = create_card(memory_window)
     frame.pack(expand=True, fill="both", padx=18, pady=18, ipadx=14, ipady=14)
 
-    create_title_label(frame, "メモリ編集").pack(anchor="w", pady=(0, 10))
+    create_title_label(frame, "ユーザー設定・メモリ編集").pack(anchor="w", pady=(0, 8))
 
-    create_small_label(frame, "ユーザー名").pack(anchor="w")
-    user_name_entry = create_entry(frame, user_name_var)
-    user_name_entry.pack(fill="x", pady=(2, 8))
+    description_label = tk.Label(
+        frame,
+        text=(
+            "ユーザー名・現在の目標・最近の進捗・好きな話題・メモを編集できます。"
+            "ここで保存した内容は、OpenAI返答用プロンプトにも反映されます。"
+        ),
+        font=("Meiryo", 9),
+        bg=PANEL_COLOR,
+        fg=SUB_TEXT_COLOR,
+        justify="left",
+        wraplength=720,
+    )
+    description_label.pack(anchor="w", pady=(0, 12))
 
-    create_small_label(frame, "現在の目標").pack(anchor="w")
-    current_goal_entry = create_entry(frame, current_goal_var)
-    current_goal_entry.pack(fill="x", pady=(2, 8))
+    top_frame = tk.Frame(frame, bg=PANEL_COLOR)
+    top_frame.pack(fill="x", pady=(0, 8))
+
+    top_frame.columnconfigure(0, weight=1)
+    top_frame.columnconfigure(1, weight=1)
+
+    user_frame = tk.Frame(top_frame, bg=PANEL_COLOR)
+    user_frame.grid(row=0, column=0, sticky="ew", padx=(0, 12))
+
+    create_small_label(user_frame, "ユーザー名").pack(anchor="w")
+    user_name_entry = create_entry(user_frame, user_name_var)
+    user_name_entry.pack(fill="x", pady=(2, 4))
+
+    sync_check = tk.Checkbutton(
+        user_frame,
+        text="キャラ設定の「ユーザーの呼び方」にも反映する",
+        variable=sync_user_call_var,
+        font=("Meiryo", 8),
+        bg=PANEL_COLOR,
+        fg=SUB_TEXT_COLOR,
+        activebackground=PANEL_COLOR,
+        activeforeground=SUB_TEXT_COLOR,
+        selectcolor=PANEL_SOFT_COLOR,
+    )
+    sync_check.pack(anchor="w")
+
+    goal_frame = tk.Frame(top_frame, bg=PANEL_COLOR)
+    goal_frame.grid(row=0, column=1, sticky="ew")
+
+    create_small_label(goal_frame, "現在の目標").pack(anchor="w")
+    current_goal_entry = create_entry(goal_frame, current_goal_var)
+    current_goal_entry.pack(fill="x", pady=(2, 4))
 
     def add_text_area(label_text, initial_text, height):
-        create_small_label(frame, label_text).pack(anchor="w")
+        create_small_label(frame, label_text).pack(anchor="w", pady=(4, 0))
 
         text_widget = create_text(frame, height=height)
-        text_widget.pack(fill="x", pady=(2, 8))
+        text_widget.pack(fill="x", pady=(2, 6))
         text_widget.insert("1.0", initial_text)
         return text_widget
 
     recent_progress_text = add_text_area("最近の進捗", memory["recent_progress"], 4)
-    favorite_topics_text = add_text_area("好きな話題", memory["favorite_topics"], 3)
-    notes_text = add_text_area("メモ", memory["notes"], 5)
+    favorite_topics_text = add_text_area("好きな話題・興味のある話題", memory["favorite_topics"], 3)
+    notes_text = add_text_area("メモ", memory["notes"], 8)
+
+    quick_frame = tk.Frame(frame, bg=PANEL_COLOR)
+    quick_frame.pack(anchor="w", pady=(0, 8))
+
+    def insert_today_note():
+        current = notes_text.get("1.0", "end-1c").strip()
+        new_line = f"[{now_text()}] "
+        if current:
+            notes_text.insert(tk.END, "\n" + new_line)
+        else:
+            notes_text.insert("1.0", new_line)
+        notes_text.focus_set()
+        notes_text.see(tk.END)
+
+    def clear_notes():
+        answer = messagebox.askyesno(
+            "メモ欄クリア",
+            "メモ欄を空にしますか？\n保存するまではファイルには反映されません。",
+        )
+
+        if answer:
+            notes_text.delete("1.0", tk.END)
+            set_status("メモ欄をクリアしました。保存すると反映されます。")
+
+    create_button(
+        quick_frame,
+        "メモに日付を追加",
+        insert_today_note,
+        width=16,
+        kind="secondary",
+    ).grid(row=0, column=0, padx=(0, 8))
+
+    create_button(
+        quick_frame,
+        "メモ欄クリア",
+        clear_notes,
+        width=12,
+        kind="secondary",
+    ).grid(row=0, column=1, padx=8)
 
     def save_memory_from_window():
         global memory
+        global profile
 
         new_memory = {
             "user_name": user_name_var.get().strip() or DEFAULT_MEMORY["user_name"],
@@ -1510,14 +1590,26 @@ def open_memory_window():
         save_memory_to_file()
         update_memory_display()
 
-        set_status("メモリを memory.json に保存しました。")
-        messagebox.showinfo("保存完了", "メモリを保存したよ。")
+        if sync_user_call_var.get():
+            profile["user_call"] = new_memory["user_name"]
+            save_profile_to_file()
+            update_profile_display()
+            refresh_chat_display()
+
+        set_status("ユーザー設定・メモリを memory.json に保存しました。")
+        messagebox.showinfo(
+            "保存完了",
+            "ユーザー設定・メモリを保存したよ。\n次のOpenAI返答からプロンプトにも反映されます。",
+        )
 
     button_frame = tk.Frame(frame, bg=PANEL_COLOR)
-    button_frame.pack(pady=(6, 0))
+    button_frame.pack(anchor="w", pady=(6, 0))
 
-    create_button(button_frame, "保存", save_memory_from_window, width=10).grid(row=0, column=0, padx=5)
-    create_button(button_frame, "閉じる", memory_window.destroy, width=10, kind="secondary").grid(row=0, column=1, padx=5)
+    create_button(button_frame, "保存", save_memory_from_window, width=10).grid(row=0, column=0, padx=(0, 8))
+    create_button(button_frame, "再読み込み", reload_memory, width=12, kind="secondary").grid(row=0, column=1, padx=8)
+    create_button(button_frame, "閉じる", memory_window.destroy, width=10, kind="secondary").grid(row=0, column=2, padx=8)
+
+
 
 
 def open_llm_prompt_window():
@@ -2518,7 +2610,7 @@ title_label.pack(pady=(13, 3))
 
 subtitle_label = tk.Label(
     header_frame,
-    text="キャラ設定編集・メモリ・OpenAI API・VOICEVOX・キャラクター表示つき相棒アプリ",
+    text="キャラ設定編集・ユーザー設定・OpenAI API・VOICEVOX・キャラクター表示つき相棒アプリ",
     font=("Meiryo", 10),
     bg=HEADER_COLOR,
     fg=SUB_TEXT_COLOR,
@@ -2831,7 +2923,7 @@ create_button(
 memory_frame = create_card(profile_main_frame)
 memory_frame.pack(side="left", expand=True, fill="both", ipadx=14, ipady=14)
 
-create_title_label(memory_frame, "メモリ").pack(anchor="w", pady=(0, 10))
+create_title_label(memory_frame, "ユーザー設定・メモリ").pack(anchor="w", pady=(0, 10))
 
 memory_summary_text = create_text(memory_frame, height=24, state="disabled")
 memory_summary_text.pack(expand=True, fill="both", pady=(0, 10))
@@ -2839,7 +2931,7 @@ memory_summary_text.pack(expand=True, fill="both", pady=(0, 10))
 memory_button_frame = tk.Frame(memory_frame, bg=PANEL_COLOR)
 memory_button_frame.pack(anchor="w")
 
-create_button(memory_button_frame, "メモリ編集", open_memory_window, width=14).grid(row=0, column=0, padx=(0, 6))
+create_button(memory_button_frame, "ユーザー設定編集", open_memory_window, width=16).grid(row=0, column=0, padx=(0, 6))
 create_button(memory_button_frame, "メモリ再読み込み", reload_memory, width=16, kind="secondary").grid(row=0, column=1, padx=6)
 create_button(memory_button_frame, "会話履歴を削除", clear_history, width=16, kind="danger").grid(row=0, column=2, padx=6)
 
@@ -3204,7 +3296,7 @@ update_rules_status_label()
 refresh_chat_display()
 update_reply_mode_label()
 load_character_image("normal")
-set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。キャラ設定編集に対応しました。")
+set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。ユーザー設定編集に対応しました。")
 
 # アプリ起動
 root.mainloop()
