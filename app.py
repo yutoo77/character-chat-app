@@ -19,8 +19,14 @@ except ImportError:
     OpenAI = None
     OpenAIError = Exception
 
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = None
+    ImageTk = None
 
-APP_VERSION = "v3.6.2"
+
+APP_VERSION = "v3.7.1"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -29,6 +35,8 @@ RULES_FILE = Path("reply_rules.json")
 MEMORY_FILE = Path("memory.json")
 LLM_SETTINGS_FILE = Path("llm_settings.json")
 VOICE_SETTINGS_FILE = Path("voice_settings.json")
+CHARACTER_IMAGE_FILE = Path("character_image.png")
+CHARACTER_IMAGE_GIF_FILE = Path("character_image.gif")
 
 # Blue / cyan / white theme
 BG_COLOR = "#eaf7ff"
@@ -878,6 +886,8 @@ def send_message(event=None):
     search_var.set("")
 
     add_message("user", user_message)
+    set_character_display_status("返答生成中...")
+    root.update_idletasks()
 
     updated_fields = update_memory_from_user_message(user_message)
 
@@ -889,6 +899,7 @@ def send_message(event=None):
 
     add_message("character", reply)
     set_latest_character_reply(reply)
+    set_character_display_status("会話中")
 
     if auto_speak_var.get():
         set_status("キャラ返答を自動読み上げしています。")
@@ -913,6 +924,7 @@ def add_starter_message():
     message = format_reply_template(random.choice(starters))
     add_message("character", message)
     set_latest_character_reply(message)
+    set_character_display_status("会話中")
 
     if auto_speak_var.get():
         set_status("キャラ返答を自動読み上げしています。")
@@ -1942,6 +1954,108 @@ def save_voice_settings_from_ui():
     messagebox.showinfo("保存完了", "音声設定を保存したよ。")
 
 
+def find_character_image_path():
+    """表示するキャラクター画像を探す"""
+    candidates = [
+        CHARACTER_IMAGE_FILE,
+        CHARACTER_IMAGE_GIF_FILE,
+        Path("images/character.png"),
+        Path("images/character.gif"),
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def load_character_image():
+    """キャラクター画像を読み込んで表示する"""
+    global character_photo
+
+    image_path = find_character_image_path()
+
+    if image_path is None:
+        character_photo = None
+        character_image_label.config(
+            image="",
+            text=(
+                "Character Image\n\n"
+                "character_image.png を\n"
+                "プロジェクト直下に置くと\n"
+                "ここに表示されます"
+            ),
+            fg=SUB_TEXT_COLOR,
+        )
+        character_image_path_var.set("画像: 未設定")
+        return
+
+    try:
+        max_width = 340
+        max_height = 260
+
+        if Image is not None and ImageTk is not None:
+            image = Image.open(image_path)
+            image = image.convert("RGBA")
+
+            try:
+                resample_filter = Image.Resampling.LANCZOS
+            except AttributeError:
+                resample_filter = Image.LANCZOS
+
+            image.thumbnail((max_width, max_height), resample_filter)
+            character_photo = ImageTk.PhotoImage(image)
+        else:
+            photo = tk.PhotoImage(file=str(image_path))
+
+            width = photo.width()
+            height = photo.height()
+
+            scale_width = max((width + max_width - 1) // max_width, 1)
+            scale_height = max((height + max_height - 1) // max_height, 1)
+            scale = max(scale_width, scale_height, 1)
+
+            if scale > 1:
+                photo = photo.subsample(scale, scale)
+
+            character_photo = photo
+
+        character_image_label.config(
+            image=character_photo,
+            text="",
+            fg=TEXT_COLOR,
+        )
+        character_image_path_var.set(f"画像: {image_path}")
+
+    except Exception as error:
+        character_photo = None
+        character_image_label.config(
+            image="",
+            text=(
+                "画像を読み込めませんでした。\n"
+                f"{error}\n\n"
+                "Pillowを入れると改善することがあります。"
+            ),
+            fg=DANGER_DARK_COLOR,
+        )
+        character_image_path_var.set("画像: 読み込みエラー")
+
+
+def reload_character_image():
+    """キャラクター画像を再読み込みする"""
+    load_character_image()
+    set_status("キャラクター画像を再読み込みしました。")
+
+
+def set_character_display_status(message):
+    """キャラクター表示欄の状態テキストを更新する"""
+    try:
+        character_status_var.set(message)
+    except Exception:
+        pass
+
+
 def on_close():
     """アプリ終了時の処理"""
     if has_unsaved_rule_changes():
@@ -2120,6 +2234,10 @@ last_saved_rules_snapshot_var = tk.StringVar(value="")
 rule_name_var = tk.StringVar()
 rule_keywords_var = tk.StringVar()
 
+character_photo = None
+character_status_var = tk.StringVar(value="待機中")
+character_image_path_var = tk.StringVar(value="画像: 未設定")
+
 # ヘッダー
 header_frame = tk.Frame(root, bg=HEADER_COLOR)
 header_frame.pack(fill="x")
@@ -2157,8 +2275,81 @@ notebook.add(rules_tab, text="返答ルール編集")
 notebook.add(voice_tab, text="音声設定")
 
 # チャットタブ
-chat_frame = create_card(chat_tab)
-chat_frame.pack(expand=True, fill="both", padx=14, pady=14, ipadx=14, ipady=14)
+chat_main_frame = tk.Frame(chat_tab, bg=BG_COLOR)
+chat_main_frame.pack(expand=True, fill="both", padx=14, pady=14)
+
+chat_frame = create_card(chat_main_frame)
+chat_frame.pack(side="left", expand=True, fill="both", padx=(0, 12), ipadx=14, ipady=14)
+
+character_display_frame = create_card(chat_main_frame)
+character_display_frame.pack(side="left", fill="y", ipadx=14, ipady=14)
+
+create_title_label(character_display_frame, "キャラクター").pack(anchor="w", pady=(0, 8))
+
+character_status_label = tk.Label(
+    character_display_frame,
+    textvariable=character_status_var,
+    font=("Meiryo", 9),
+    bg=PANEL_COLOR,
+    fg=SUB_TEXT_COLOR,
+)
+character_status_label.pack(anchor="w", pady=(0, 8))
+
+character_image_box = tk.Frame(
+    character_display_frame,
+    bg=PANEL_SOFT_COLOR,
+    width=360,
+    height=280,
+    relief="solid",
+    bd=1,
+)
+character_image_box.pack(pady=(0, 8))
+character_image_box.pack_propagate(False)
+
+character_image_label = tk.Label(
+    character_image_box,
+    text="Character Image",
+    font=("Meiryo", 10),
+    bg=PANEL_SOFT_COLOR,
+    fg=SUB_TEXT_COLOR,
+    justify="center",
+)
+character_image_label.pack(expand=True, fill="both")
+
+character_image_path_label = tk.Label(
+    character_display_frame,
+    textvariable=character_image_path_var,
+    font=("Meiryo", 8),
+    bg=PANEL_COLOR,
+    fg=SUB_TEXT_COLOR,
+    wraplength=250,
+    justify="left",
+)
+character_image_path_label.pack(anchor="w", pady=(0, 8))
+
+create_button(
+    character_display_frame,
+    "画像を再読み込み",
+    reload_character_image,
+    width=18,
+    kind="secondary",
+).pack(anchor="w", pady=(0, 8))
+
+character_image_hint_label = tk.Label(
+    character_display_frame,
+    text=(
+        "使い方:\n"
+        "character_image.png を\n"
+        "プロジェクト直下に置くと\n"
+        "ここに表示されます。"
+    ),
+    font=("Meiryo", 8),
+    bg=PANEL_COLOR,
+    fg=SUB_TEXT_COLOR,
+    justify="left",
+    wraplength=250,
+)
+character_image_hint_label.pack(anchor="w")
 
 chat_header = tk.Frame(chat_frame, bg=PANEL_COLOR)
 chat_header.pack(fill="x", pady=(0, 10))
@@ -2622,7 +2813,8 @@ update_rule_count_label()
 update_rules_status_label()
 refresh_chat_display()
 update_reply_mode_label()
-set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。音声設定は専用タブで調整できます。")
+load_character_image()
+set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。画像表示サイズを改善しました。")
 
 # アプリ起動
 root.mainloop()
