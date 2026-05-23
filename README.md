@@ -17,9 +17,10 @@ Character Chat App は、`character_profile.json` に保存されたキャラク
 - LLM用プロンプト生成
 - LLM設定ファイルの読み込み
 - OpenAI APIによる返答生成
+- 短めで音声化しやすい返答生成
 
-v3.0では、OpenAI API連携を追加しました。  
-返答モードに `openai` を追加し、`build_llm_prompt()` で生成したプロンプトをOpenAI APIへ渡して、実際のLLMによるキャラクター返答を生成できるようにしています。
+v3.1では、OpenAI API返答の品質改善を行いました。  
+将来的な音声読み上げを見据えて、返答が長くなりすぎないようにし、2〜4文程度の自然な会話文を返すようにプロンプトと設定を調整しています。
 
 APIキーはコードや設定ファイルには書かず、環境変数 `OPENAI_API_KEY` から読み込みます。
 
@@ -41,6 +42,11 @@ APIキーはコードや設定ファイルには書かず、環境変数 `OPENAI
 - OpenAI APIエラー時のメッセージ表示
 - LLM用プロンプト生成
 - LLM設定を含むプロンプト生成
+- OpenAI返答の長さ制御
+- 音声読み上げを見据えた短め返答
+- `max_output_tokens` による出力上限設定
+- `verbosity` による返答の詳しさ設定
+- `response_style` による返答スタイル設定
 - LLM用プロンプト確認ウィンドウ
 - LLM用プロンプトのコピー
 - LLM設定確認ウィンドウ
@@ -148,6 +154,7 @@ openai
 - build_llm_prompt() で生成したプロンプトをAPIに渡す
 - APIキーは環境変数 OPENAI_API_KEY から読み込む
 - llm_settings.json の model に指定したモデルを使用する
+- v3.1では短めで音声化しやすい返答になるように調整
 ```
 
 ## LLM設定ファイル
@@ -165,6 +172,9 @@ openai
   "use_memory": true,
   "use_chat_history": true,
   "temperature": 0.7,
+  "max_output_tokens": 350,
+  "verbosity": "low",
+  "response_style": "short_voice_friendly",
   "notes": "Local LLM settings. This file is ignored by Git."
 }
 ```
@@ -192,6 +202,15 @@ use_chat_history
 
 temperature
 - 将来LLM APIに渡す生成のランダム性設定
+
+max_output_tokens
+- OpenAI APIから返ってくる出力の最大トークン数
+
+verbosity
+- 返答の詳しさ。low / medium / high を想定
+
+response_style
+- 返答スタイル。v3.1では short_voice_friendly を標準にしている
 
 notes
 - 設定に関するメモ
@@ -229,7 +248,7 @@ notes
 チャット画面の「LLMプロンプト確認」ボタンを押すと、現在の入力欄の内容をもとにプロンプト確認ウィンドウが開きます。  
 生成されたプロンプトはコピーできます。
 
-v3.0では、このプロンプトをOpenAI APIに渡して、実際のキャラクター返答を生成できます。
+v3.1では、将来的な音声読み上げを見据えて、短く自然な会話文を返すようにプロンプトを調整しています。
 
 ## 返答エンジン設計
 
@@ -250,6 +269,23 @@ openai の場合：generate_openai_reply()
 ```
 
 OpenAI API連携は `generate_openai_reply()` に分離しており、将来的にローカルLLMやRAG連携を追加する場合も、同じ構成で拡張できます。
+
+## v3.1の改善点
+
+v3.1では、OpenAI APIで生成される返答の品質を改善しました。
+
+```text
+- 返答を短めに調整
+- 音声読み上げを見据えた長さに調整
+- 2〜4文程度の自然な会話文を目指す
+- 長い箇条書きや説明文を避ける
+- 気持ちを受け止める → 現実的に一言 → 次の一手、の流れを強化
+- max_output_tokens による出力上限設定を追加
+- verbosity による返答の詳しさ設定を追加
+- response_style による返答スタイル設定を追加
+```
+
+これにより、今後の音声返答機能に進むための土台を整えています。
 
 ## 画面構成
 
@@ -411,7 +447,7 @@ openai_test.py
 
 ## バージョン
 
-v3.0
+v3.1
 
 ## 開発で学んだこと
 
@@ -440,15 +476,20 @@ v3.0
 - 環境変数によるAPIキー管理
 - OpenAI SDKによるResponses API呼び出し
 - LLM返答モードの追加
+- OpenAI返答の品質改善
+- 音声読み上げを見据えた返答設計
+- max_output_tokens による出力制御
+- verbosity / response_style による返答調整
 - Gitによるコミット管理
 
 ## 今後追加したい機能
 
-- LLM返答の品質改善
+- 音声読み上げ
+- 自動音声返答
+- 読み上げON/OFF
+- ローカルLLM連携
 - 会話履歴の要約
 - メモリ自動更新ルールの強化
-- ローカルLLM連携
-- 音声読み上げ
 - RAG連携
 - 実行ファイル化
 - 立ち絵・キャラクターUI

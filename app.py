@@ -13,7 +13,8 @@ except ImportError:
     OpenAI = None
     OpenAIError = Exception
 
-APP_VERSION = "v3.0"
+
+APP_VERSION = "v3.1"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -108,6 +109,9 @@ DEFAULT_LLM_SETTINGS = {
     "use_memory": True,
     "use_chat_history": True,
     "temperature": 0.7,
+    "max_output_tokens": 350,
+    "verbosity": "low",
+    "response_style": "short_voice_friendly",
     "notes": "Default local LLM settings.",
 }
 
@@ -287,6 +291,22 @@ def load_llm_settings_from_file():
         settings["temperature"] = float(settings["temperature"])
     except (ValueError, TypeError):
         settings["temperature"] = DEFAULT_LLM_SETTINGS["temperature"]
+
+    try:
+        settings["max_output_tokens"] = int(settings["max_output_tokens"])
+    except (ValueError, TypeError):
+        settings["max_output_tokens"] = DEFAULT_LLM_SETTINGS["max_output_tokens"]
+
+    if settings["max_output_tokens"] < 100:
+        settings["max_output_tokens"] = 100
+
+    if settings["max_output_tokens"] > 1000:
+        settings["max_output_tokens"] = 1000
+
+    verbosity = str(settings.get("verbosity", "low")).lower().strip()
+    if verbosity not in ["low", "medium", "high"]:
+        verbosity = "low"
+    settings["verbosity"] = verbosity
 
     settings["use_memory"] = bool(settings["use_memory"])
     settings["use_chat_history"] = bool(settings["use_chat_history"])
@@ -504,9 +524,6 @@ def format_reply_template(template):
         return template
 
 
-# --------------------
-# Reply engines
-# --------------------
 def generate_rule_based_reply(user_message):
     """reply_rules.json のルールで返答を作る"""
     message = user_message.lower()
@@ -540,9 +557,7 @@ def get_recent_chat_summary(limit=4):
 
 
 def generate_mock_llm_reply(user_message):
-    """
-    LLM APIを使わずに、LLM連携後の流れを疑似的に再現する返答エンジン。
-    """
+    """LLM APIを使わずに、LLM連携後の流れを疑似的に再現する返答エンジン。"""
     base_reply = generate_rule_based_reply(user_message)
     recent_summary = get_recent_chat_summary()
 
@@ -568,10 +583,24 @@ def generate_mock_llm_reply(user_message):
     return random.choice(reflective_parts)
 
 
+def get_response_length_instruction():
+    """OpenAI返答の長さ方針を返す"""
+    style = str(llm_settings.get("response_style", "short_voice_friendly"))
+
+    if style == "very_short":
+        return "返答は1〜2文にしてください。音声で聞いても負担が少ない長さにしてください。"
+
+    if style == "standard":
+        return "返答は3〜5文程度にしてください。必要なら軽く理由も添えてください。"
+
+    return (
+        "返答は2〜4文程度にしてください。将来の音声読み上げを想定し、"
+        "長い箇条書きや長文説明は避けてください。"
+    )
+
+
 def build_llm_prompt(user_message):
-    """
-    将来LLM APIに渡すためのプロンプトを作る。
-    """
+    """LLM APIに渡すためのプロンプトを作る。"""
     max_recent_messages = llm_settings["max_recent_messages"]
 
     if llm_settings["use_chat_history"]:
@@ -589,13 +618,23 @@ def build_llm_prompt(user_message):
     else:
         memory_block = "ユーザーメモリはこのプロンプトでは使用しません。"
 
+    length_instruction = get_response_length_instruction()
+
     prompt = f"""あなたは「{profile['character_name']}」という会話キャラクターです。
+
+## 重要な会話方針
+あなたの返答は、アプリ上でそのまま表示され、将来的には音声読み上げされます。
+そのため、短く、自然で、会話らしい返答をしてください。
+説明文ではなく、目の前の相手に話しかけるように返してください。
 
 ## LLM設定
 - provider: {llm_settings['provider']}
 - model: {llm_settings['model']}
 - reply_engine: {llm_settings['reply_engine']}
 - temperature: {llm_settings['temperature']}
+- max_output_tokens: {llm_settings['max_output_tokens']}
+- verbosity: {llm_settings['verbosity']}
+- response_style: {llm_settings.get('response_style', 'short_voice_friendly')}
 - max_recent_messages: {llm_settings['max_recent_messages']}
 - use_memory: {llm_settings['use_memory']}
 - use_chat_history: {llm_settings['use_chat_history']}
@@ -626,18 +665,62 @@ def build_llm_prompt(user_message):
 ## 今回のユーザー入力
 {user_message}
 
-## 応答方針
+## 応答ルール
 - キャラクター設定に沿って返答してください。
-- ユーザーの気持ちを受け止めてから返答してください。
-- 必要なときは、優しく現実的に指摘してください。
-- 上辺だけの励ましではなく、根拠や次の一手を示してください。
-- 返答は長すぎず、自然な会話として返してください。
-- ユーザーが行動しやすいように、最後に小さな次の一歩を添えてください。
+- まずユーザーの気持ちや状況を軽く受け止めてください。
+- その後、必要なら現実的な一言を添えてください。
+- 最後に、すぐできる小さな次の一手を1つだけ示してください。
+- 上辺だけの励ましや説教は避けてください。
+- 返答内で「AIとして」「プロンプトでは」などのメタ発言はしないでください。
+- Markdownの大きな見出しや長い箇条書きは使わないでください。
+- {length_instruction}
+
+## 返答形式
+自然な日本語の会話文だけを返してください。
 
 ## キャラクターとしての返答
 """
 
     return prompt
+
+
+def build_openai_request_params(prompt, include_text_options=True):
+    """OpenAI Responses API に渡すパラメータを作る"""
+    model = str(llm_settings.get("model", "gpt-5.4-nano"))
+    max_output_tokens = int(llm_settings.get("max_output_tokens", 350))
+    verbosity = str(llm_settings.get("verbosity", "low")).lower().strip()
+
+    request_params = {
+        "model": model,
+        "input": prompt,
+        "max_output_tokens": max_output_tokens,
+    }
+
+    if include_text_options and verbosity in ["low", "medium", "high"]:
+        request_params["text"] = {
+            "verbosity": verbosity,
+        }
+
+    return request_params
+
+
+def call_openai_with_fallback(client, prompt):
+    """OpenAI APIを呼び出す。text.verbosityが合わない場合は通常呼び出しへ戻す。"""
+    request_params = build_openai_request_params(prompt, include_text_options=True)
+
+    try:
+        return client.responses.create(**request_params)
+    except TypeError:
+        fallback_params = build_openai_request_params(prompt, include_text_options=False)
+        return client.responses.create(**fallback_params)
+    except OpenAIError as error:
+        error_text = str(error).lower()
+
+        if "verbosity" in error_text or "text" in error_text or "unknown parameter" in error_text:
+            fallback_params = build_openai_request_params(prompt, include_text_options=False)
+            return client.responses.create(**fallback_params)
+
+        raise
 
 
 def generate_openai_reply(user_message):
@@ -655,16 +738,10 @@ def generate_openai_reply(user_message):
         )
 
     prompt = build_llm_prompt(user_message)
-    model = str(llm_settings.get("model", "gpt-5.4-nano"))
 
     try:
         client = OpenAI()
-
-        response = client.responses.create(
-            model=model,
-            input=prompt,
-        )
-
+        response = call_openai_with_fallback(client, prompt)
         reply = response.output_text.strip()
 
         if not reply:
@@ -685,12 +762,7 @@ def generate_openai_reply(user_message):
 
 
 def generate_reply(user_message):
-    """
-    返答生成の入口。
-
-    v3.0では openai モードを追加し、
-    build_llm_prompt() で作ったプロンプトをOpenAI APIに渡せるようにする。
-    """
+    """返答生成の入口。"""
     mode = reply_mode_var.get()
 
     if mode == REPLY_MODE_OPENAI:
@@ -1156,8 +1228,8 @@ def open_llm_prompt_window():
     description_label = tk.Label(
         frame,
         text=(
-            "この画面では、LLM APIに渡す予定のプロンプトを確認できます。\n"
-            "v3.0では、このプロンプトをOpenAI APIに渡して返答を生成できます。"
+            "この画面では、OpenAI APIに渡すプロンプトを確認できます。\n"
+            "v3.1では、短めで音声化しやすい返答になるようにプロンプトを調整しています。"
         ),
         font=("Meiryo", 9),
         bg=PANEL_COLOR,
@@ -1286,9 +1358,6 @@ def set_status(message):
     status_var.set(message)
 
 
-# --------------------
-# UI helper functions
-# --------------------
 def create_card(parent):
     return tk.Frame(
         parent,
@@ -1399,14 +1468,9 @@ root.title(APP_TITLE)
 root.geometry("1060x780")
 root.configure(bg=BG_COLOR)
 
-# ttkの見た目を少し整える
 style = ttk.Style()
 style.theme_use("default")
-style.configure(
-    "TNotebook",
-    background=BG_COLOR,
-    borderwidth=0,
-)
+style.configure("TNotebook", background=BG_COLOR, borderwidth=0)
 style.configure(
     "TNotebook.Tab",
     font=("Meiryo", 10),
@@ -1451,7 +1515,7 @@ title_label.pack(pady=(13, 3))
 
 subtitle_label = tk.Label(
     header_frame,
-    text="キャラ設定・返答ルール・メモリ・OpenAI APIを使って会話できるデスクトップアプリ",
+    text="キャラ設定・メモリ・OpenAI APIを使って、短く自然に会話できるデスクトップアプリ",
     font=("Meiryo", 10),
     bg=HEADER_COLOR,
     fg=SUB_TEXT_COLOR,
@@ -1470,9 +1534,7 @@ notebook.add(chat_tab, text="チャット")
 notebook.add(profile_tab, text="キャラ・メモリ")
 notebook.add(rules_tab, text="返答ルール編集")
 
-# --------------------
 # チャットタブ
-# --------------------
 chat_frame = create_card(chat_tab)
 chat_frame.pack(expand=True, fill="both", padx=14, pady=14, ipadx=14, ipady=14)
 
@@ -1517,7 +1579,7 @@ reply_mode_status_label.pack(side="left", padx=10)
 
 mode_hint_label = tk.Label(
     mode_frame,
-    text="rule=従来の返答 / mock_llm=疑似LLM / openai=OpenAI API",
+    text="rule=従来の返答 / mock_llm=疑似LLM / openai=短めOpenAI返答",
     font=("Meiryo", 8),
     bg=PANEL_COLOR,
     fg=SUB_TEXT_COLOR,
@@ -1570,9 +1632,7 @@ create_button(
     kind="secondary",
 ).pack(anchor="w", pady=(8, 0))
 
-# --------------------
 # キャラ・メモリタブ
-# --------------------
 profile_main_frame = tk.Frame(profile_tab, bg=BG_COLOR)
 profile_main_frame.pack(expand=True, fill="both", padx=14, pady=14)
 
@@ -1618,9 +1678,7 @@ create_button(memory_button_frame, "メモリ編集", open_memory_window, width=
 create_button(memory_button_frame, "メモリ再読み込み", reload_memory, width=16, kind="secondary").grid(row=0, column=1, padx=6)
 create_button(memory_button_frame, "会話履歴を削除", clear_history, width=16, kind="danger").grid(row=0, column=2, padx=6)
 
-# --------------------
 # 返答ルール編集タブ
-# --------------------
 rules_main_frame = tk.Frame(rules_tab, bg=BG_COLOR)
 rules_main_frame.pack(expand=True, fill="both", padx=14, pady=14)
 
