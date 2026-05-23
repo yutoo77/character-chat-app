@@ -20,7 +20,7 @@ except ImportError:
     OpenAIError = Exception
 
 
-APP_VERSION = "v3.5.1"
+APP_VERSION = "v3.6.2"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -130,6 +130,12 @@ DEFAULT_VOICE_SETTINGS = {
     "engine": "windows",
     "voicevox_base_url": "http://127.0.0.1:50021",
     "voicevox_speaker": 3,
+    "voicevox_speed_scale": 1.0,
+    "voicevox_pitch_scale": 0.0,
+    "voicevox_intonation_scale": 1.0,
+    "voicevox_volume_scale": 1.0,
+    "voicevox_pre_phoneme_length": 0.1,
+    "voicevox_post_phoneme_length": 0.1,
     "notes": "Local voice settings. engine can be windows or voicevox.",
 }
 
@@ -356,9 +362,29 @@ def load_voice_settings_from_file():
     except (ValueError, TypeError):
         settings["voicevox_speaker"] = DEFAULT_VOICE_SETTINGS["voicevox_speaker"]
 
+    float_keys = [
+        "voicevox_speed_scale",
+        "voicevox_pitch_scale",
+        "voicevox_intonation_scale",
+        "voicevox_volume_scale",
+        "voicevox_pre_phoneme_length",
+        "voicevox_post_phoneme_length",
+    ]
+
+    for key in float_keys:
+        try:
+            settings[key] = float(settings[key])
+        except (ValueError, TypeError):
+            settings[key] = DEFAULT_VOICE_SETTINGS[key]
+
+    settings["voicevox_speed_scale"] = min(max(settings["voicevox_speed_scale"], 0.5), 2.0)
+    settings["voicevox_pitch_scale"] = min(max(settings["voicevox_pitch_scale"], -0.15), 0.15)
+    settings["voicevox_intonation_scale"] = min(max(settings["voicevox_intonation_scale"], 0.0), 2.0)
+    settings["voicevox_volume_scale"] = min(max(settings["voicevox_volume_scale"], 0.0), 2.0)
+    settings["voicevox_pre_phoneme_length"] = min(max(settings["voicevox_pre_phoneme_length"], 0.0), 1.5)
+    settings["voicevox_post_phoneme_length"] = min(max(settings["voicevox_post_phoneme_length"], 0.0), 1.5)
+
     return settings
-
-
 
 def save_voice_settings_to_file():
     """音声設定を voice_settings.json に保存する"""
@@ -1598,6 +1624,17 @@ $synth.Speak($text)
                 pass
 
 
+def apply_voicevox_audio_query_settings(audio_query):
+    """VOICEVOXのAudioQueryに画面・設定ファイルの音声パラメータを反映する"""
+    audio_query["speedScale"] = float(voice_settings.get("voicevox_speed_scale", 1.0))
+    audio_query["pitchScale"] = float(voice_settings.get("voicevox_pitch_scale", 0.0))
+    audio_query["intonationScale"] = float(voice_settings.get("voicevox_intonation_scale", 1.0))
+    audio_query["volumeScale"] = float(voice_settings.get("voicevox_volume_scale", 1.0))
+    audio_query["prePhonemeLength"] = float(voice_settings.get("voicevox_pre_phoneme_length", 0.1))
+    audio_query["postPhonemeLength"] = float(voice_settings.get("voicevox_post_phoneme_length", 0.1))
+    return audio_query
+
+
 def synthesize_voicevox_to_wav(speech_text):
     """VOICEVOX EngineでWAV音声を生成して、一時ファイルパスを返す"""
     base_url = get_voicevox_base_url()
@@ -1618,14 +1655,18 @@ def synthesize_voicevox_to_wav(speech_text):
     )
 
     with urllib.request.urlopen(audio_query_request, timeout=20) as response:
-        audio_query = response.read()
+        audio_query_bytes = response.read()
+
+    audio_query = json.loads(audio_query_bytes.decode("utf-8"))
+    audio_query = apply_voicevox_audio_query_settings(audio_query)
+    audio_query_bytes = json.dumps(audio_query, ensure_ascii=False).encode("utf-8")
 
     synthesis_params = urllib.parse.urlencode({"speaker": speaker})
     synthesis_url = f"{base_url}/synthesis?{synthesis_params}"
 
     synthesis_request = urllib.request.Request(
         synthesis_url,
-        data=audio_query,
+        data=audio_query_bytes,
         method="POST",
         headers={"Content-Type": "application/json"},
     )
@@ -1719,6 +1760,9 @@ def speak_text_worker(text):
 
 def speak_text_async(text):
     """読み上げを別スレッドで実行する"""
+    if not update_voice_settings_from_ui(show_error=True):
+        return
+
     threading.Thread(
         target=speak_text_worker,
         args=(text,),
@@ -1871,6 +1915,31 @@ def check_voicevox_connection():
         target=check_voicevox_connection_worker,
         daemon=True,
     ).start()
+
+
+def update_voice_settings_from_ui(show_error=True):
+    """UIの音声設定を voice_settings に反映する"""
+    try:
+        voice_settings["engine"] = voice_engine_var.get()
+        voice_settings["voicevox_speed_scale"] = float(voice_speed_var.get())
+        voice_settings["voicevox_volume_scale"] = float(voice_volume_var.get())
+        voice_settings["voicevox_intonation_scale"] = float(voice_intonation_var.get())
+        voice_settings["voicevox_pitch_scale"] = float(voice_pitch_var.get())
+        return True
+    except ValueError:
+        if show_error:
+            messagebox.showerror("入力エラー", "音声設定には数値を入力してね。")
+        return False
+
+
+def save_voice_settings_from_ui():
+    """UIの音声設定を voice_settings.json に保存する"""
+    if not update_voice_settings_from_ui(show_error=True):
+        return
+
+    save_voice_settings_to_file()
+    set_status("音声設定を voice_settings.json に保存しました。")
+    messagebox.showinfo("保存完了", "音声設定を保存したよ。")
 
 
 def on_close():
@@ -2033,6 +2102,11 @@ voice_engine_var = tk.StringVar(value=voice_settings["engine"])
 voice_speaker_var = tk.StringVar(value=f"speaker id:{voice_settings['voicevox_speaker']}")
 voice_speaker_map = {}
 
+voice_speed_var = tk.StringVar(value=str(voice_settings["voicevox_speed_scale"]))
+voice_volume_var = tk.StringVar(value=str(voice_settings["voicevox_volume_scale"]))
+voice_intonation_var = tk.StringVar(value=str(voice_settings["voicevox_intonation_scale"]))
+voice_pitch_var = tk.StringVar(value=str(voice_settings["voicevox_pitch_scale"]))
+
 reply_mode_var = tk.StringVar(value=REPLY_MODE_RULE)
 reply_mode_status_var = tk.StringVar(value="返答モード: ルールベース")
 
@@ -2075,10 +2149,12 @@ notebook.pack(expand=True, fill="both", padx=18, pady=14)
 chat_tab = tk.Frame(notebook, bg=BG_COLOR)
 profile_tab = tk.Frame(notebook, bg=BG_COLOR)
 rules_tab = tk.Frame(notebook, bg=BG_COLOR)
+voice_tab = tk.Frame(notebook, bg=BG_COLOR)
 
 notebook.add(chat_tab, text="チャット")
 notebook.add(profile_tab, text="キャラ・メモリ")
 notebook.add(rules_tab, text="返答ルール編集")
+notebook.add(voice_tab, text="音声設定")
 
 # チャットタブ
 chat_frame = create_card(chat_tab)
@@ -2136,11 +2212,8 @@ mode_hint_label.pack(side="left", padx=8)
 speech_frame = tk.Frame(chat_frame, bg=PANEL_COLOR)
 speech_frame.pack(fill="x", pady=(0, 10))
 
-speech_top_frame = tk.Frame(speech_frame, bg=PANEL_COLOR)
-speech_top_frame.pack(fill="x", pady=(0, 6))
-
 auto_speak_check = tk.Checkbutton(
-    speech_top_frame,
+    speech_frame,
     text="自動読み上げ",
     variable=auto_speak_var,
     font=("Meiryo", 9),
@@ -2152,10 +2225,10 @@ auto_speak_check = tk.Checkbutton(
 )
 auto_speak_check.pack(side="left", padx=(0, 8))
 
-create_small_label(speech_top_frame, "音声エンジン").pack(side="left", padx=(8, 4))
+create_small_label(speech_frame, "音声エンジン").pack(side="left", padx=(8, 4))
 
 voice_engine_combobox = ttk.Combobox(
-    speech_top_frame,
+    speech_frame,
     textvariable=voice_engine_var,
     values=["windows", "voicevox"],
     state="readonly",
@@ -2165,7 +2238,7 @@ voice_engine_combobox = ttk.Combobox(
 voice_engine_combobox.pack(side="left", padx=(0, 8))
 
 create_button(
-    speech_top_frame,
+    speech_frame,
     "最新返答を読み上げ",
     speak_latest_reply,
     width=18,
@@ -2173,53 +2246,20 @@ create_button(
 ).pack(side="left", padx=4)
 
 create_button(
-    speech_top_frame,
+    speech_frame,
     "読み上げ停止",
     stop_speech,
     width=12,
     kind="secondary",
 ).pack(side="left", padx=4)
 
-speech_bottom_frame = tk.Frame(speech_frame, bg=PANEL_COLOR)
-speech_bottom_frame.pack(fill="x")
-
-create_small_label(speech_bottom_frame, "VOICEVOX話者").pack(side="left", padx=(0, 4))
-
-voice_speaker_combobox = ttk.Combobox(
-    speech_bottom_frame,
-    textvariable=voice_speaker_var,
-    values=[],
-    state="readonly",
-    width=38,
-    font=("Meiryo", 9),
-)
-voice_speaker_combobox.pack(side="left", padx=(0, 8))
-voice_speaker_combobox.bind("<<ComboboxSelected>>", on_voicevox_speaker_changed)
-
 create_button(
-    speech_bottom_frame,
-    "VOICEVOX接続確認",
-    check_voicevox_connection,
-    width=16,
+    speech_frame,
+    "音声設定タブへ",
+    lambda: notebook.select(voice_tab),
+    width=14,
     kind="secondary",
 ).pack(side="left", padx=4)
-
-create_button(
-    speech_bottom_frame,
-    "話者取得",
-    refresh_voicevox_speakers,
-    width=10,
-    kind="secondary",
-).pack(side="left", padx=4)
-
-speech_hint_label = tk.Label(
-    speech_bottom_frame,
-    text="話者取得後にVOICEVOX話者を選べます",
-    font=("Meiryo", 8),
-    bg=PANEL_COLOR,
-    fg=SUB_TEXT_COLOR,
-)
-speech_hint_label.pack(side="left", padx=8)
 
 search_frame = tk.Frame(chat_frame, bg=PANEL_COLOR)
 search_frame.pack(fill="x", pady=(0, 10))
@@ -2243,29 +2283,32 @@ input_entry.pack(side="left", expand=True, fill="x", padx=(0, 8))
 create_button(input_frame, "送信", send_message, width=10).pack(side="left", padx=4)
 create_button(input_frame, "入力クリア", clear_input, width=10, kind="secondary").pack(side="left", padx=4)
 
+chat_shortcut_frame = tk.Frame(chat_frame, bg=PANEL_COLOR)
+chat_shortcut_frame.pack(anchor="w", pady=(10, 0))
+
 create_button(
-    chat_frame,
+    chat_shortcut_frame,
     "キャラから話しかける",
     add_starter_message,
-    width=20,
+    width=18,
     kind="secondary",
-).pack(anchor="w", pady=(10, 0))
+).grid(row=0, column=0, padx=(0, 8))
 
 create_button(
-    chat_frame,
+    chat_shortcut_frame,
     "LLMプロンプト確認",
     open_llm_prompt_window,
-    width=20,
+    width=18,
     kind="secondary",
-).pack(anchor="w", pady=(8, 0))
+).grid(row=0, column=1, padx=8)
 
 create_button(
-    chat_frame,
+    chat_shortcut_frame,
     "LLM設定確認",
     open_llm_settings_window,
-    width=20,
+    width=18,
     kind="secondary",
-).pack(anchor="w", pady=(8, 0))
+).grid(row=0, column=2, padx=8)
 
 # キャラ・メモリタブ
 profile_main_frame = tk.Frame(profile_tab, bg=BG_COLOR)
@@ -2411,6 +2454,148 @@ rule_hint_label = tk.Label(
 )
 rule_hint_label.pack(anchor="w")
 
+# --------------------
+# 音声設定タブ
+# --------------------
+voice_main_frame = create_card(voice_tab)
+voice_main_frame.pack(expand=True, fill="both", padx=14, pady=14, ipadx=14, ipady=14)
+
+create_title_label(voice_main_frame, "音声設定").pack(anchor="w", pady=(0, 10))
+
+voice_description_label = tk.Label(
+    voice_main_frame,
+    text=(
+        "VOICEVOXの話者・話速・音量・抑揚・高さを調整できます。"
+        "数値を変えたら「音声設定保存」を押してね。"
+    ),
+    font=("Meiryo", 9),
+    bg=PANEL_COLOR,
+    fg=SUB_TEXT_COLOR,
+    justify="left",
+    wraplength=860,
+)
+voice_description_label.pack(anchor="w", pady=(0, 12))
+
+voice_engine_frame = tk.Frame(voice_main_frame, bg=PANEL_COLOR)
+voice_engine_frame.pack(fill="x", pady=(0, 10))
+
+create_small_label(voice_engine_frame, "音声エンジン").pack(side="left", padx=(0, 8))
+
+voice_engine_combobox_voice_tab = ttk.Combobox(
+    voice_engine_frame,
+    textvariable=voice_engine_var,
+    values=["windows", "voicevox"],
+    state="readonly",
+    width=12,
+    font=("Meiryo", 9),
+)
+voice_engine_combobox_voice_tab.pack(side="left", padx=(0, 12))
+
+create_button(
+    voice_engine_frame,
+    "VOICEVOX接続確認",
+    check_voicevox_connection,
+    width=16,
+    kind="secondary",
+).pack(side="left", padx=4)
+
+create_button(
+    voice_engine_frame,
+    "話者取得",
+    refresh_voicevox_speakers,
+    width=10,
+    kind="secondary",
+).pack(side="left", padx=4)
+
+speaker_frame = tk.Frame(voice_main_frame, bg=PANEL_COLOR)
+speaker_frame.pack(fill="x", pady=(0, 14))
+
+create_small_label(speaker_frame, "VOICEVOX話者").pack(anchor="w", pady=(0, 4))
+
+voice_speaker_combobox = ttk.Combobox(
+    speaker_frame,
+    textvariable=voice_speaker_var,
+    values=[],
+    state="readonly",
+    width=58,
+    font=("Meiryo", 9),
+)
+voice_speaker_combobox.pack(anchor="w")
+voice_speaker_combobox.bind("<<ComboboxSelected>>", on_voicevox_speaker_changed)
+
+settings_grid = tk.Frame(voice_main_frame, bg=PANEL_COLOR)
+settings_grid.pack(anchor="w", pady=(0, 14))
+
+def add_voice_setting_row(row, label_text, variable, from_value, to_value, increment, hint):
+    label = create_small_label(settings_grid, label_text)
+    label.grid(row=row, column=0, sticky="w", padx=(0, 10), pady=5)
+
+    spinbox = tk.Spinbox(
+        settings_grid,
+        from_=from_value,
+        to=to_value,
+        increment=increment,
+        textvariable=variable,
+        width=8,
+        font=("Meiryo", 10),
+    )
+    spinbox.grid(row=row, column=1, sticky="w", padx=(0, 10), pady=5)
+
+    hint_label = tk.Label(
+        settings_grid,
+        text=hint,
+        font=("Meiryo", 8),
+        bg=PANEL_COLOR,
+        fg=SUB_TEXT_COLOR,
+    )
+    hint_label.grid(row=row, column=2, sticky="w", pady=5)
+
+add_voice_setting_row(0, "話速", voice_speed_var, 0.5, 2.0, 0.1, "標準 1.0。大きいほど速くなります。")
+add_voice_setting_row(1, "音量", voice_volume_var, 0.0, 2.0, 0.1, "標準 1.0。大きいほど大きくなります。")
+add_voice_setting_row(2, "抑揚", voice_intonation_var, 0.0, 2.0, 0.1, "標準 1.0。大きいほど表情が強くなります。")
+add_voice_setting_row(3, "高さ", voice_pitch_var, -0.15, 0.15, 0.01, "標準 0.0。少しずつ変えるのがおすすめです。")
+
+voice_button_frame = tk.Frame(voice_main_frame, bg=PANEL_COLOR)
+voice_button_frame.pack(anchor="w", pady=(4, 0))
+
+create_button(
+    voice_button_frame,
+    "音声設定保存",
+    save_voice_settings_from_ui,
+    width=14,
+).grid(row=0, column=0, padx=(0, 8))
+
+create_button(
+    voice_button_frame,
+    "最新返答を読み上げ",
+    speak_latest_reply,
+    width=18,
+    kind="secondary",
+).grid(row=0, column=1, padx=8)
+
+create_button(
+    voice_button_frame,
+    "読み上げ停止",
+    stop_speech,
+    width=12,
+    kind="secondary",
+).grid(row=0, column=2, padx=8)
+
+voice_note_label = tk.Label(
+    voice_main_frame,
+    text=(
+        "補足: 音声設定はVOICEVOX読み上げ時に反映されます。"
+        "Windows標準音声では話速・抑揚などは反映されません。"
+    ),
+    font=("Meiryo", 8),
+    bg=PANEL_COLOR,
+    fg=SUB_TEXT_COLOR,
+    justify="left",
+    wraplength=860,
+)
+voice_note_label.pack(anchor="w", pady=(14, 0))
+
+
 # ステータスバー
 status_label = tk.Label(
     root,
@@ -2437,7 +2622,7 @@ update_rule_count_label()
 update_rules_status_label()
 refresh_chat_display()
 update_reply_mode_label()
-set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。VOICEVOX話者は「話者取得」で読み込めます。")
+set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。音声設定は専用タブで調整できます。")
 
 # アプリ起動
 root.mainloop()
