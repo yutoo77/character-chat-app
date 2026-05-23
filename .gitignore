@@ -10,3 +10,6 @@ openai_test.py
 character_image.png
 character_image.gif
 images/
+character_normal.png
+character_talking.png
+character_thinking.png

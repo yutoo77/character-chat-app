@@ -26,7 +26,7 @@ except ImportError:
     ImageTk = None
 
 
-APP_VERSION = "v3.7.1"
+APP_VERSION = "v3.8"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -37,6 +37,9 @@ LLM_SETTINGS_FILE = Path("llm_settings.json")
 VOICE_SETTINGS_FILE = Path("voice_settings.json")
 CHARACTER_IMAGE_FILE = Path("character_image.png")
 CHARACTER_IMAGE_GIF_FILE = Path("character_image.gif")
+CHARACTER_IMAGE_NORMAL_FILE = Path("character_normal.png")
+CHARACTER_IMAGE_TALKING_FILE = Path("character_talking.png")
+CHARACTER_IMAGE_THINKING_FILE = Path("character_thinking.png")
 
 # Blue / cyan / white theme
 BG_COLOR = "#eaf7ff"
@@ -886,6 +889,7 @@ def send_message(event=None):
     search_var.set("")
 
     add_message("user", user_message)
+    set_character_expression("thinking")
     set_character_display_status("返答生成中...")
     root.update_idletasks()
 
@@ -899,6 +903,7 @@ def send_message(event=None):
 
     add_message("character", reply)
     set_latest_character_reply(reply)
+    set_character_expression("talking")
     set_character_display_status("会話中")
 
     if auto_speak_var.get():
@@ -924,6 +929,7 @@ def add_starter_message():
     message = format_reply_template(random.choice(starters))
     add_message("character", message)
     set_latest_character_reply(message)
+    set_character_expression("talking")
     set_character_display_status("会話中")
 
     if auto_speak_var.get():
@@ -1765,6 +1771,7 @@ def speak_text_worker(text):
 
         if success:
             set_status_from_thread("読み上げが完了しました。")
+            root.after(0, lambda: set_character_expression("normal"))
 
     except Exception as error:
         set_status_from_thread(f"読み上げ中にエラーが出ました: {error}")
@@ -1954,27 +1961,70 @@ def save_voice_settings_from_ui():
     messagebox.showinfo("保存完了", "音声設定を保存したよ。")
 
 
-def find_character_image_path():
-    """表示するキャラクター画像を探す"""
-    candidates = [
+def get_character_image_candidates(expression="normal"):
+    """状態に応じたキャラクター画像候補を返す"""
+    expression = str(expression or "normal")
+
+    if expression == "talking":
+        return [
+            CHARACTER_IMAGE_TALKING_FILE,
+            Path("images/character_talking.png"),
+            Path("images/character_talking.gif"),
+            CHARACTER_IMAGE_NORMAL_FILE,
+            CHARACTER_IMAGE_FILE,
+            CHARACTER_IMAGE_GIF_FILE,
+            Path("images/character.png"),
+            Path("images/character.gif"),
+        ]
+
+    if expression == "thinking":
+        return [
+            CHARACTER_IMAGE_THINKING_FILE,
+            Path("images/character_thinking.png"),
+            Path("images/character_thinking.gif"),
+            CHARACTER_IMAGE_NORMAL_FILE,
+            CHARACTER_IMAGE_FILE,
+            CHARACTER_IMAGE_GIF_FILE,
+            Path("images/character.png"),
+            Path("images/character.gif"),
+        ]
+
+    return [
+        CHARACTER_IMAGE_NORMAL_FILE,
         CHARACTER_IMAGE_FILE,
         CHARACTER_IMAGE_GIF_FILE,
         Path("images/character.png"),
         Path("images/character.gif"),
     ]
 
-    for candidate in candidates:
+
+def find_character_image_path(expression="normal"):
+    """表示するキャラクター画像を探す"""
+    for candidate in get_character_image_candidates(expression):
         if candidate.exists():
             return candidate
 
     return None
 
 
-def load_character_image():
+def get_expression_label(expression):
+    """表情・状態の表示名を返す"""
+    labels = {
+        "normal": "通常",
+        "thinking": "考え中",
+        "talking": "会話中",
+    }
+    return labels.get(str(expression or "normal"), "通常")
+
+
+def load_character_image(expression="normal"):
     """キャラクター画像を読み込んで表示する"""
     global character_photo
+    global current_character_expression
 
-    image_path = find_character_image_path()
+    expression = str(expression or "normal")
+    current_character_expression = expression
+    image_path = find_character_image_path(expression)
 
     if image_path is None:
         character_photo = None
@@ -1989,6 +2039,7 @@ def load_character_image():
             fg=SUB_TEXT_COLOR,
         )
         character_image_path_var.set("画像: 未設定")
+        character_status_var.set(f"{get_expression_label(expression)} / 画像未設定")
         return
 
     try:
@@ -2027,6 +2078,7 @@ def load_character_image():
             fg=TEXT_COLOR,
         )
         character_image_path_var.set(f"画像: {image_path}")
+        character_status_var.set(get_expression_label(expression))
 
     except Exception as error:
         character_photo = None
@@ -2040,12 +2092,18 @@ def load_character_image():
             fg=DANGER_DARK_COLOR,
         )
         character_image_path_var.set("画像: 読み込みエラー")
+        character_status_var.set("画像読み込みエラー")
 
 
 def reload_character_image():
     """キャラクター画像を再読み込みする"""
-    load_character_image()
+    load_character_image(current_character_expression)
     set_status("キャラクター画像を再読み込みしました。")
+
+
+def set_character_expression(expression):
+    """キャラクターの状態に応じて画像を切り替える"""
+    load_character_image(expression)
 
 
 def set_character_display_status(message):
@@ -2235,6 +2293,7 @@ rule_name_var = tk.StringVar()
 rule_keywords_var = tk.StringVar()
 
 character_photo = None
+current_character_expression = "normal"
 character_status_var = tk.StringVar(value="待機中")
 character_image_path_var = tk.StringVar(value="画像: 未設定")
 
@@ -2339,9 +2398,12 @@ character_image_hint_label = tk.Label(
     character_display_frame,
     text=(
         "使い方:\n"
-        "character_image.png を\n"
-        "プロジェクト直下に置くと\n"
-        "ここに表示されます。"
+        "character_image.png を置くと表示。\n"
+        "差分を使う場合は\n"
+        "character_normal.png\n"
+        "character_thinking.png\n"
+        "character_talking.png\n"
+        "を追加します。"
     ),
     font=("Meiryo", 8),
     bg=PANEL_COLOR,
@@ -2813,8 +2875,8 @@ update_rule_count_label()
 update_rules_status_label()
 refresh_chat_display()
 update_reply_mode_label()
-load_character_image()
-set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。画像表示サイズを改善しました。")
+load_character_image("normal")
+set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。表情差分表示に対応しました。")
 
 # アプリ起動
 root.mainloop()
