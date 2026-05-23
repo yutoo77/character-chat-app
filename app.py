@@ -20,7 +20,7 @@ except ImportError:
     OpenAIError = Exception
 
 
-APP_VERSION = "v3.4"
+APP_VERSION = "v3.5.1"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -358,6 +358,14 @@ def load_voice_settings_from_file():
 
     return settings
 
+
+
+def save_voice_settings_to_file():
+    """音声設定を voice_settings.json に保存する"""
+    VOICE_SETTINGS_FILE.write_text(
+        json.dumps(voice_settings, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 def normalize_message(raw_message):
     """読み込んだ会話履歴を安全な形に整える"""
@@ -1728,6 +1736,103 @@ def speak_latest_reply():
     speak_text_async(latest_character_reply)
 
 
+def fetch_voicevox_speakers():
+    """VOICEVOX Engineから話者一覧を取得する"""
+    base_url = get_voicevox_base_url()
+    speakers_url = f"{base_url}/speakers"
+
+    with urllib.request.urlopen(speakers_url, timeout=10) as response:
+        raw_data = response.read().decode("utf-8")
+
+    return json.loads(raw_data)
+
+
+def build_voicevox_speaker_choices(speakers):
+    """VOICEVOX話者一覧からUI表示用の選択肢を作る"""
+    choices = []
+    speaker_map = {}
+
+    for speaker in speakers:
+        speaker_name = str(speaker.get("name", "unknown"))
+
+        for style in speaker.get("styles", []):
+            style_name = str(style.get("name", "default"))
+            style_id = int(style.get("id", 0))
+
+            label = f"{speaker_name} / {style_name} (id:{style_id})"
+            choices.append(label)
+            speaker_map[label] = style_id
+
+    return choices, speaker_map
+
+
+def refresh_voicevox_speakers_worker():
+    """VOICEVOX話者一覧を取得してUIへ反映する"""
+    try:
+        speakers = fetch_voicevox_speakers()
+        choices, speaker_map = build_voicevox_speaker_choices(speakers)
+
+        if not choices:
+            set_status_from_thread("VOICEVOX話者一覧が空でした。")
+            return
+
+        def update_ui():
+            global voice_speaker_map
+
+            voice_speaker_map = speaker_map
+            voice_speaker_combobox["values"] = choices
+
+            current_speaker_id = get_voicevox_speaker()
+            selected_label = ""
+
+            for label, speaker_id in voice_speaker_map.items():
+                if speaker_id == current_speaker_id:
+                    selected_label = label
+                    break
+
+            if not selected_label:
+                selected_label = choices[0]
+                voice_settings["voicevox_speaker"] = voice_speaker_map[selected_label]
+                save_voice_settings_to_file()
+
+            voice_speaker_var.set(selected_label)
+            set_status(f"VOICEVOX話者一覧を取得しました: {len(choices)}種類")
+
+        root.after(0, update_ui)
+
+    except Exception:
+        set_status_from_thread("VOICEVOX話者一覧を取得できませんでした。")
+        root.after(
+            0,
+            lambda: messagebox.showwarning(
+                "VOICEVOX話者取得",
+                "VOICEVOX話者一覧を取得できませんでした。\nVOICEVOXを起動してから、もう一度試してね。",
+            ),
+        )
+
+
+def refresh_voicevox_speakers():
+    """VOICEVOX話者一覧取得を別スレッドで実行する"""
+    threading.Thread(
+        target=refresh_voicevox_speakers_worker,
+        daemon=True,
+    ).start()
+
+
+def on_voicevox_speaker_changed(event=None):
+    """VOICEVOX話者選択時にspeaker IDを更新する"""
+    selected_label = voice_speaker_var.get()
+
+    if selected_label not in voice_speaker_map:
+        set_status("VOICEVOX話者がまだ読み込まれていません。")
+        return
+
+    speaker_id = voice_speaker_map[selected_label]
+    voice_settings["voicevox_speaker"] = speaker_id
+    save_voice_settings_to_file()
+    set_status(f"VOICEVOX話者を更新しました: {selected_label}")
+
+
 def check_voicevox_connection_worker():
     """VOICEVOX Engineへの接続を確認する"""
     base_url = get_voicevox_base_url()
@@ -1739,13 +1844,15 @@ def check_voicevox_connection_worker():
             version = response.read().decode("utf-8").strip().strip('"')
 
         set_status_from_thread(f"VOICEVOX Engineに接続できました: {version}")
-        root.after(
-            0,
-            lambda: messagebox.showinfo(
+
+        def show_success_and_refresh():
+            messagebox.showinfo(
                 "VOICEVOX接続確認",
                 f"VOICEVOX Engineに接続できました。\nversion: {version}",
-            ),
-        )
+            )
+            refresh_voicevox_speakers()
+
+        root.after(0, show_success_and_refresh)
 
     except Exception:
         set_status_from_thread("VOICEVOX Engineに接続できませんでした。")
@@ -1921,7 +2028,11 @@ input_var = tk.StringVar()
 search_var = tk.StringVar()
 auto_speak_var = tk.BooleanVar(value=False)
 latest_character_reply = ""
+
 voice_engine_var = tk.StringVar(value=voice_settings["engine"])
+voice_speaker_var = tk.StringVar(value=f"speaker id:{voice_settings['voicevox_speaker']}")
+voice_speaker_map = {}
+
 reply_mode_var = tk.StringVar(value=REPLY_MODE_RULE)
 reply_mode_status_var = tk.StringVar(value="返答モード: ルールベース")
 
@@ -2025,8 +2136,11 @@ mode_hint_label.pack(side="left", padx=8)
 speech_frame = tk.Frame(chat_frame, bg=PANEL_COLOR)
 speech_frame.pack(fill="x", pady=(0, 10))
 
+speech_top_frame = tk.Frame(speech_frame, bg=PANEL_COLOR)
+speech_top_frame.pack(fill="x", pady=(0, 6))
+
 auto_speak_check = tk.Checkbutton(
-    speech_frame,
+    speech_top_frame,
     text="自動読み上げ",
     variable=auto_speak_var,
     font=("Meiryo", 9),
@@ -2038,10 +2152,10 @@ auto_speak_check = tk.Checkbutton(
 )
 auto_speak_check.pack(side="left", padx=(0, 8))
 
-create_small_label(speech_frame, "音声エンジン").pack(side="left", padx=(8, 4))
+create_small_label(speech_top_frame, "音声エンジン").pack(side="left", padx=(8, 4))
 
 voice_engine_combobox = ttk.Combobox(
-    speech_frame,
+    speech_top_frame,
     textvariable=voice_engine_var,
     values=["windows", "voicevox"],
     state="readonly",
@@ -2051,7 +2165,7 @@ voice_engine_combobox = ttk.Combobox(
 voice_engine_combobox.pack(side="left", padx=(0, 8))
 
 create_button(
-    speech_frame,
+    speech_top_frame,
     "最新返答を読み上げ",
     speak_latest_reply,
     width=18,
@@ -2059,30 +2173,53 @@ create_button(
 ).pack(side="left", padx=4)
 
 create_button(
-    speech_frame,
+    speech_top_frame,
     "読み上げ停止",
     stop_speech,
     width=12,
     kind="secondary",
 ).pack(side="left", padx=4)
 
+speech_bottom_frame = tk.Frame(speech_frame, bg=PANEL_COLOR)
+speech_bottom_frame.pack(fill="x")
+
+create_small_label(speech_bottom_frame, "VOICEVOX話者").pack(side="left", padx=(0, 4))
+
+voice_speaker_combobox = ttk.Combobox(
+    speech_bottom_frame,
+    textvariable=voice_speaker_var,
+    values=[],
+    state="readonly",
+    width=38,
+    font=("Meiryo", 9),
+)
+voice_speaker_combobox.pack(side="left", padx=(0, 8))
+voice_speaker_combobox.bind("<<ComboboxSelected>>", on_voicevox_speaker_changed)
+
 create_button(
-    speech_frame,
+    speech_bottom_frame,
     "VOICEVOX接続確認",
     check_voicevox_connection,
     width=16,
     kind="secondary",
 ).pack(side="left", padx=4)
 
+create_button(
+    speech_bottom_frame,
+    "話者取得",
+    refresh_voicevox_speakers,
+    width=10,
+    kind="secondary",
+).pack(side="left", padx=4)
+
 speech_hint_label = tk.Label(
-    speech_frame,
-    text="windows / voicevox を切り替えできます",
+    speech_bottom_frame,
+    text="話者取得後にVOICEVOX話者を選べます",
     font=("Meiryo", 8),
     bg=PANEL_COLOR,
     fg=SUB_TEXT_COLOR,
 )
 speech_hint_label.pack(side="left", padx=8)
-
 
 search_frame = tk.Frame(chat_frame, bg=PANEL_COLOR)
 search_frame.pack(fill="x", pady=(0, 10))
@@ -2300,7 +2437,7 @@ update_rule_count_label()
 update_rules_status_label()
 refresh_chat_display()
 update_reply_mode_label()
-set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。")
+set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。VOICEVOX話者は「話者取得」で読み込めます。")
 
 # アプリ起動
 root.mainloop()
