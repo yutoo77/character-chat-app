@@ -7,3 +7,6 @@ memory.json
 llm_settings.json
 voice_settings.json
 openai_test.py
+character_image.png
+character_image.gif
+images/
