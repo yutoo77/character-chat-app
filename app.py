@@ -26,7 +26,7 @@ except ImportError:
     ImageTk = None
 
 
-APP_VERSION = "v3.9"
+APP_VERSION = "v4.0"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -2420,11 +2420,13 @@ chat_tab = tk.Frame(notebook, bg=BG_COLOR)
 profile_tab = tk.Frame(notebook, bg=BG_COLOR)
 rules_tab = tk.Frame(notebook, bg=BG_COLOR)
 voice_tab = tk.Frame(notebook, bg=BG_COLOR)
+overview_tab = tk.Frame(notebook, bg=BG_COLOR)
 
 notebook.add(chat_tab, text="チャット")
 notebook.add(profile_tab, text="キャラ・メモリ")
 notebook.add(rules_tab, text="返答ルール編集")
 notebook.add(voice_tab, text="音声設定")
+notebook.add(overview_tab, text="アプリ概要")
 
 # チャットタブ
 chat_main_frame = tk.Frame(chat_tab, bg=BG_COLOR)
@@ -2958,6 +2960,99 @@ voice_note_label = tk.Label(
 voice_note_label.pack(anchor="w", pady=(14, 0))
 
 
+# --------------------
+# アプリ概要タブ
+# --------------------
+overview_frame = create_card(overview_tab)
+overview_frame.pack(expand=True, fill="both", padx=14, pady=14, ipadx=18, ipady=18)
+
+create_title_label(overview_frame, "Character Chat App v4.0").pack(anchor="w", pady=(0, 10))
+
+overview_intro_label = tk.Label(
+    overview_frame,
+    text=(
+        "キャラクター設定・メモリ・OpenAI API・VOICEVOX・画像表示を組み合わせた、"
+        "自分用のキャラクター会話アプリです。\n"
+        "v4.0では、GitHubや成果物として見せやすいように機能構成と説明を整理しています。"
+    ),
+    font=("Meiryo", 10),
+    bg=PANEL_COLOR,
+    fg=TEXT_COLOR,
+    justify="left",
+    wraplength=860,
+)
+overview_intro_label.pack(anchor="w", pady=(0, 14))
+
+overview_content = tk.Text(
+    overview_frame,
+    font=("Meiryo", 10),
+    wrap="word",
+    bg=INPUT_BG_COLOR,
+    fg=TEXT_COLOR,
+    relief="solid",
+    bd=1,
+    height=22,
+    padx=10,
+    pady=10,
+)
+overview_content.pack(expand=True, fill="both", pady=(0, 12))
+
+overview_text = """主な機能
+
+1. キャラクター会話
+- character_profile.json からキャラクター設定を読み込みます。
+- 返答モードは rule / mock_llm / openai を切り替えられます。
+- OpenAI APIを使うと、キャラ設定・メモリ・直近履歴を反映した返答を生成します。
+
+2. メモリ
+- memory.json にユーザーの目標や進捗を保存します。
+- 一部の発言から簡単なメモリ自動更新を行います。
+
+3. 音声読み上げ
+- Windows標準音声とVOICEVOXを切り替えられます。
+- VOICEVOXでは話者・スタイルを選択できます。
+- 話速・音量・抑揚・高さを音声設定タブから調整できます。
+
+4. キャラクター画像
+- character_image.png を置くとチャット画面右側に表示されます。
+- character_normal.png / character_thinking.png / character_talking.png による状態別表示にも対応しています。
+
+5. UI
+- チャット欄はユーザー発言とキャラ発言を見分けやすく表示します。
+- チャット・キャラ/メモリ・返答ルール・音声設定・アプリ概要をタブで整理しています。
+
+今後の拡張候補
+
+- 表情差分の追加
+- 音声再生中の簡易アニメーション
+- 会話履歴の要約
+- RAG連携
+- 実行ファイル化
+- READMEへのスクリーンショット追加
+"""
+
+overview_content.insert("1.0", overview_text)
+overview_content.config(state="disabled")
+
+overview_button_frame = tk.Frame(overview_frame, bg=PANEL_COLOR)
+overview_button_frame.pack(anchor="w")
+
+create_button(
+    overview_button_frame,
+    "チャットへ移動",
+    lambda: notebook.select(chat_tab),
+    width=14,
+).grid(row=0, column=0, padx=(0, 8))
+
+create_button(
+    overview_button_frame,
+    "音声設定へ移動",
+    lambda: notebook.select(voice_tab),
+    width=14,
+    kind="secondary",
+).grid(row=0, column=1, padx=8)
+
+
 # ステータスバー
 status_label = tk.Label(
     root,
@@ -2985,7 +3080,7 @@ update_rules_status_label()
 refresh_chat_display()
 update_reply_mode_label()
 load_character_image("normal")
-set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。チャットUIを改善しました。")
+set_status(f"{profile['character_name']} の設定・返答ルール・メモリを読み込みました。v4.0として成果物表示を整理しました。")
 
 # アプリ起動
 root.mainloop()
