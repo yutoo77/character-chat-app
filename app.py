@@ -5,6 +5,9 @@ import subprocess
 import tempfile
 import threading
 import tkinter as tk
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox
@@ -17,7 +20,7 @@ except ImportError:
     OpenAIError = Exception
 
 
-APP_VERSION = "v3.2"
+APP_VERSION = "v3.4"
 APP_TITLE = "Character Chat App"
 
 PROFILE_FILE = Path("character_profile.json")
@@ -25,6 +28,7 @@ HISTORY_FILE = Path("chat_history.json")
 RULES_FILE = Path("reply_rules.json")
 MEMORY_FILE = Path("memory.json")
 LLM_SETTINGS_FILE = Path("llm_settings.json")
+VOICE_SETTINGS_FILE = Path("voice_settings.json")
 
 # Blue / cyan / white theme
 BG_COLOR = "#eaf7ff"
@@ -51,6 +55,9 @@ REPLY_MODE_LABELS = {
     REPLY_MODE_MOCK_LLM: "疑似LLM",
     REPLY_MODE_OPENAI: "OpenAI API",
 }
+
+current_speech_process = None
+speech_process_lock = threading.Lock()
 
 
 DEFAULT_PROFILE = {
@@ -116,6 +123,14 @@ DEFAULT_LLM_SETTINGS = {
     "verbosity": "low",
     "response_style": "short_voice_friendly",
     "notes": "Default local LLM settings.",
+}
+
+
+DEFAULT_VOICE_SETTINGS = {
+    "engine": "windows",
+    "voicevox_base_url": "http://127.0.0.1:50021",
+    "voicevox_speaker": 3,
+    "notes": "Local voice settings. engine can be windows or voicevox.",
 }
 
 
@@ -313,6 +328,33 @@ def load_llm_settings_from_file():
 
     settings["use_memory"] = bool(settings["use_memory"])
     settings["use_chat_history"] = bool(settings["use_chat_history"])
+
+    return settings
+
+
+
+def load_voice_settings_from_file():
+    """voice_settings.json から音声設定を読み込む"""
+    data = load_json_file(VOICE_SETTINGS_FILE, DEFAULT_VOICE_SETTINGS.copy())
+    settings = DEFAULT_VOICE_SETTINGS.copy()
+
+    if isinstance(data, dict):
+        for key in settings:
+            if key in data:
+                settings[key] = data[key]
+
+    engine = str(settings.get("engine", "windows")).lower().strip()
+    if engine not in ["windows", "voicevox"]:
+        engine = "windows"
+    settings["engine"] = engine
+
+    base_url = str(settings.get("voicevox_base_url", DEFAULT_VOICE_SETTINGS["voicevox_base_url"])).strip()
+    settings["voicevox_base_url"] = base_url.rstrip("/")
+
+    try:
+        settings["voicevox_speaker"] = int(settings["voicevox_speaker"])
+    except (ValueError, TypeError):
+        settings["voicevox_speaker"] = DEFAULT_VOICE_SETTINGS["voicevox_speaker"]
 
     return settings
 
@@ -1243,7 +1285,7 @@ def open_llm_prompt_window():
         frame,
         text=(
             "この画面では、OpenAI APIに渡すプロンプトを確認できます。\n"
-            "v3.2では、短めで音声読み上げしやすい返答になるようにプロンプトを調整しています。"
+            "v3.3.1では、読み上げ用PowerShell呼び出しを修正し、音声返答を安定化しています。"
         ),
         font=("Meiryo", 9),
         bg=PANEL_COLOR,
@@ -1351,15 +1393,54 @@ def open_llm_settings_window():
 
 
 def clean_text_for_speech(text):
-    """読み上げ用にテキストを軽く整える"""
+    """読み上げ用にテキストを整える"""
     cleaned = str(text).strip()
 
-    # 長すぎる読み上げを防ぐ
-    max_chars = 600
+    replacements = {
+        "#": "",
+        "*": "",
+        "`": "",
+        "- ": "",
+        "・": "、",
+    }
+
+    for before, after in replacements.items():
+        cleaned = cleaned.replace(before, after)
+
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    cleaned = "。".join(lines)
+
+    max_chars = 500
     if len(cleaned) > max_chars:
         cleaned = cleaned[:max_chars] + "。"
 
     return cleaned
+
+
+def get_selected_voice_engine():
+    """現在選択されている音声エンジンを返す"""
+    try:
+        engine = voice_engine_var.get()
+    except Exception:
+        engine = voice_settings.get("engine", "windows")
+
+    if engine not in ["windows", "voicevox"]:
+        return "windows"
+
+    return engine
+
+
+def get_voicevox_base_url():
+    """VOICEVOX EngineのURLを返す"""
+    return str(voice_settings.get("voicevox_base_url", "http://127.0.0.1:50021")).rstrip("/")
+
+
+def get_voicevox_speaker():
+    """VOICEVOXのspeaker IDを返す"""
+    try:
+        return int(voice_settings.get("voicevox_speaker", 3))
+    except (ValueError, TypeError):
+        return 3
 
 
 def set_latest_character_reply(message):
@@ -1374,11 +1455,233 @@ def set_status_from_thread(message):
     root.after(0, lambda: set_status(message))
 
 
+def clear_current_speech_process(process):
+    """現在の読み上げプロセスを安全に解除する"""
+    global current_speech_process
+
+    with speech_process_lock:
+        if current_speech_process is process:
+            current_speech_process = None
+
+
+def stop_speech(show_message=True):
+    """現在の読み上げを停止する"""
+    global current_speech_process
+
+    with speech_process_lock:
+        process = current_speech_process
+        current_speech_process = None
+
+    if process is not None and process.poll() is None:
+        try:
+            process.terminate()
+            if show_message:
+                set_status("読み上げを停止しました。")
+        except Exception as error:
+            set_status(f"読み上げ停止中にエラーが出ました: {error}")
+    elif show_message:
+        set_status("現在読み上げ中の音声はありません。")
+
+
+def run_powershell_audio_process(script_text, args, timeout=90):
+    """一時ps1を作成してPowerShell音声処理を実行する"""
+    global current_speech_process
+
+    ps1_temp_path = None
+    process = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".ps1",
+            delete=False,
+        ) as ps1_temp_file:
+            ps1_temp_file.write(script_text)
+            ps1_temp_path = ps1_temp_file.name
+
+        process = subprocess.Popen(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                ps1_temp_path,
+                *args,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        with speech_process_lock:
+            current_speech_process = process
+
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            set_status_from_thread("読み上げがタイムアウトしたため停止しました。")
+            return False
+
+        if process.returncode == 0:
+            return True
+
+        error_message = (stderr or "").strip()
+        if error_message:
+            set_status_from_thread(f"読み上げエラー: {error_message}")
+        else:
+            set_status_from_thread("読み上げを停止しました。")
+
+        return False
+
+    finally:
+        if process is not None:
+            clear_current_speech_process(process)
+
+        if ps1_temp_path:
+            try:
+                Path(ps1_temp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def speak_with_windows_voice(speech_text):
+    """Windows標準音声で読み上げる"""
+    text_temp_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".txt",
+            delete=False,
+        ) as text_temp_file:
+            text_temp_file.write(speech_text)
+            text_temp_path = text_temp_file.name
+
+        powershell_script = """
+param(
+    [string]$TextPath
+)
+
+Add-Type -AssemblyName System.Speech
+
+$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$synth.Rate = 0
+$synth.Volume = 100
+
+$text = Get-Content -Raw -Encoding UTF8 -Path $TextPath
+$synth.Speak($text)
+"""
+
+        return run_powershell_audio_process(
+            powershell_script,
+            ["-TextPath", text_temp_path],
+            timeout=90,
+        )
+
+    finally:
+        if text_temp_path:
+            try:
+                Path(text_temp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def synthesize_voicevox_to_wav(speech_text):
+    """VOICEVOX EngineでWAV音声を生成して、一時ファイルパスを返す"""
+    base_url = get_voicevox_base_url()
+    speaker = get_voicevox_speaker()
+
+    query_params = urllib.parse.urlencode(
+        {
+            "text": speech_text,
+            "speaker": speaker,
+        }
+    )
+
+    audio_query_url = f"{base_url}/audio_query?{query_params}"
+    audio_query_request = urllib.request.Request(
+        audio_query_url,
+        data=b"",
+        method="POST",
+    )
+
+    with urllib.request.urlopen(audio_query_request, timeout=20) as response:
+        audio_query = response.read()
+
+    synthesis_params = urllib.parse.urlencode({"speaker": speaker})
+    synthesis_url = f"{base_url}/synthesis?{synthesis_params}"
+
+    synthesis_request = urllib.request.Request(
+        synthesis_url,
+        data=audio_query,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+
+    with urllib.request.urlopen(synthesis_request, timeout=60) as response:
+        wav_bytes = response.read()
+
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        suffix=".wav",
+        delete=False,
+    ) as wav_file:
+        wav_file.write(wav_bytes)
+        return wav_file.name
+
+
+def play_wav_with_powershell(wav_path):
+    """WAVファイルをPowerShell経由で再生する"""
+    powershell_script = """
+param(
+    [string]$WavPath
+)
+
+$player = New-Object System.Media.SoundPlayer
+$player.SoundLocation = $WavPath
+$player.Load()
+$player.PlaySync()
+"""
+
+    return run_powershell_audio_process(
+        powershell_script,
+        ["-WavPath", wav_path],
+        timeout=120,
+    )
+
+
+def speak_with_voicevox(speech_text):
+    """VOICEVOX Engineで音声合成して再生する"""
+    wav_path = None
+
+    try:
+        set_status_from_thread("VOICEVOXで音声を生成しています。")
+        wav_path = synthesize_voicevox_to_wav(speech_text)
+        set_status_from_thread("VOICEVOX音声を再生しています。")
+        return play_wav_with_powershell(wav_path)
+
+    except urllib.error.URLError:
+        set_status_from_thread(
+            "VOICEVOX Engineに接続できません。VOICEVOXを起動してから試してね。"
+        )
+        return False
+    except Exception as error:
+        set_status_from_thread(f"VOICEVOX読み上げ中にエラーが出ました: {error}")
+        return False
+    finally:
+        if wav_path:
+            try:
+                Path(wav_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 def speak_text_worker(text):
-    """
-    Windows標準のSystem.Speechを使って読み上げる。
-    将来的にVOICEVOXなどへ差し替える場合も、この関数群を置き換える方針にする。
-    """
+    """選択された音声エンジンで読み上げる"""
     speech_text = clean_text_for_speech(text)
 
     if not speech_text:
@@ -1389,62 +1692,21 @@ def speak_text_worker(text):
         set_status_from_thread("現在の読み上げ機能はWindows環境のみ対応です。")
         return
 
-    temp_path = None
-
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            suffix=".txt",
-            delete=False,
-        ) as temp_file:
-            temp_file.write(speech_text)
-            temp_path = temp_file.name
+        stop_speech(show_message=False)
+        engine = get_selected_voice_engine()
 
-        powershell_script = r"""
-& {
-    param($textPath)
-
-    Add-Type -AssemblyName System.Speech
-    $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
-    $synth.Rate = 0
-    $synth.Volume = 100
-    $text = Get-Content -Raw -Encoding UTF8 $textPath
-    $synth.Speak($text)
-}
-"""
-
-        result = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                powershell_script,
-                temp_path,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=90,
-        )
-
-        if result.returncode == 0:
-            set_status_from_thread("読み上げが完了しました。")
+        if engine == "voicevox":
+            success = speak_with_voicevox(speech_text)
         else:
-            error_message = result.stderr.strip() or "読み上げに失敗しました。"
-            set_status_from_thread(f"読み上げエラー: {error_message}")
+            set_status_from_thread("Windows標準音声で読み上げ中です。")
+            success = speak_with_windows_voice(speech_text)
 
-    except subprocess.TimeoutExpired:
-        set_status_from_thread("読み上げがタイムアウトしました。")
+        if success:
+            set_status_from_thread("読み上げが完了しました。")
+
     except Exception as error:
         set_status_from_thread(f"読み上げ中にエラーが出ました: {error}")
-    finally:
-        if temp_path:
-            try:
-                Path(temp_path).unlink(missing_ok=True)
-            except Exception:
-                pass
 
 
 def speak_text_async(text):
@@ -1466,6 +1728,44 @@ def speak_latest_reply():
     speak_text_async(latest_character_reply)
 
 
+def check_voicevox_connection_worker():
+    """VOICEVOX Engineへの接続を確認する"""
+    base_url = get_voicevox_base_url()
+
+    try:
+        version_url = f"{base_url}/version"
+
+        with urllib.request.urlopen(version_url, timeout=5) as response:
+            version = response.read().decode("utf-8").strip().strip('"')
+
+        set_status_from_thread(f"VOICEVOX Engineに接続できました: {version}")
+        root.after(
+            0,
+            lambda: messagebox.showinfo(
+                "VOICEVOX接続確認",
+                f"VOICEVOX Engineに接続できました。\nversion: {version}",
+            ),
+        )
+
+    except Exception:
+        set_status_from_thread("VOICEVOX Engineに接続できませんでした。")
+        root.after(
+            0,
+            lambda: messagebox.showwarning(
+                "VOICEVOX接続確認",
+                "VOICEVOX Engineに接続できませんでした。\nVOICEVOXを起動してから、もう一度試してね。",
+            ),
+        )
+
+
+def check_voicevox_connection():
+    """VOICEVOX Engineへの接続確認を別スレッドで実行する"""
+    threading.Thread(
+        target=check_voicevox_connection_worker,
+        daemon=True,
+    ).start()
+
+
 def on_close():
     """アプリ終了時の処理"""
     if has_unsaved_rule_changes():
@@ -1480,6 +1780,7 @@ def on_close():
             set_status("終了をキャンセルしました。")
             return
 
+    stop_speech(show_message=False)
     root.destroy()
 
 
@@ -1589,6 +1890,7 @@ profile = load_profile_from_file()
 reply_rules = load_reply_rules_from_file()
 memory = load_memory_from_file()
 llm_settings = load_llm_settings_from_file()
+voice_settings = load_voice_settings_from_file()
 chat_history = load_chat_history()
 
 
@@ -1619,6 +1921,7 @@ input_var = tk.StringVar()
 search_var = tk.StringVar()
 auto_speak_var = tk.BooleanVar(value=False)
 latest_character_reply = ""
+voice_engine_var = tk.StringVar(value=voice_settings["engine"])
 reply_mode_var = tk.StringVar(value=REPLY_MODE_RULE)
 reply_mode_status_var = tk.StringVar(value="返答モード: ルールベース")
 
@@ -1647,7 +1950,7 @@ title_label.pack(pady=(13, 3))
 
 subtitle_label = tk.Label(
     header_frame,
-    text="キャラ設定・メモリ・OpenAI API・音声読み上げを使って会話できるデスクトップアプリ",
+    text="キャラ設定・メモリ・OpenAI API・安定した音声読み上げを使って会話できるデスクトップアプリ",
     font=("Meiryo", 10),
     bg=HEADER_COLOR,
     fg=SUB_TEXT_COLOR,
@@ -1735,6 +2038,18 @@ auto_speak_check = tk.Checkbutton(
 )
 auto_speak_check.pack(side="left", padx=(0, 8))
 
+create_small_label(speech_frame, "音声エンジン").pack(side="left", padx=(8, 4))
+
+voice_engine_combobox = ttk.Combobox(
+    speech_frame,
+    textvariable=voice_engine_var,
+    values=["windows", "voicevox"],
+    state="readonly",
+    width=10,
+    font=("Meiryo", 9),
+)
+voice_engine_combobox.pack(side="left", padx=(0, 8))
+
 create_button(
     speech_frame,
     "最新返答を読み上げ",
@@ -1743,9 +2058,25 @@ create_button(
     kind="secondary",
 ).pack(side="left", padx=4)
 
+create_button(
+    speech_frame,
+    "読み上げ停止",
+    stop_speech,
+    width=12,
+    kind="secondary",
+).pack(side="left", padx=4)
+
+create_button(
+    speech_frame,
+    "VOICEVOX接続確認",
+    check_voicevox_connection,
+    width=16,
+    kind="secondary",
+).pack(side="left", padx=4)
+
 speech_hint_label = tk.Label(
     speech_frame,
-    text="Windows標準音声で読み上げます",
+    text="windows / voicevox を切り替えできます",
     font=("Meiryo", 8),
     bg=PANEL_COLOR,
     fg=SUB_TEXT_COLOR,

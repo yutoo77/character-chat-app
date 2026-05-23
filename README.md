@@ -19,9 +19,12 @@ Character Chat App は、`character_profile.json` に保存されたキャラク
 - OpenAI APIによる返答生成
 - 短めで音声化しやすい返答生成
 - Windows標準音声による読み上げ
+- 読み上げ停止
+- 読み上げの重なり防止
+- VOICEVOX Engine連携準備
 
-v3.2では、音声読み上げ機能の土台を追加しました。  
-最新のキャラクター返答を手動で読み上げられるほか、自動読み上げをONにすると、キャラ返答の生成後にそのまま音声で読み上げられます。
+v3.4では、VOICEVOX連携準備を追加しました。  
+音声エンジンを `windows` / `voicevox` から選べるようにし、VOICEVOX Engineが起動している場合は、`audio_query` と `synthesis` を使って生成したWAV音声を再生できるようにしています。
 
 APIキーはコードや設定ファイルには書かず、環境変数 `OPENAI_API_KEY` から読み込みます。
 
@@ -31,7 +34,8 @@ APIキーはコードや設定ファイルには書かず、環境変数 `OPENAI
 - `reply_rules.json` の読み込み
 - `memory.json` の読み込み
 - `llm_settings.json` の読み込み
-- `llm_settings.example.json` による設定例の提供
+- `voice_settings.json` の読み込み
+- `llm_settings.example.json` / `voice_settings.example.json` による設定例の提供
 - キャラ名・一人称・ユーザーの呼び方の反映
 - ユーザー入力
 - 返答エンジン切り替え
@@ -40,49 +44,23 @@ APIキーはコードや設定ファイルには書かず、環境変数 `OPENAI
 - OpenAI API連携
 - `openai` 返答モード
 - 環境変数 `OPENAI_API_KEY` からのAPIキー読み込み
-- OpenAI APIエラー時のメッセージ表示
 - LLM用プロンプト生成
-- LLM設定を含むプロンプト生成
 - OpenAI返答の長さ制御
-- 音声読み上げを見据えた短め返答
 - Windows標準音声による読み上げ
+- VOICEVOX Engineによる読み上げ
+- 音声エンジン切り替え
+- VOICEVOX接続確認
 - 最新キャラ返答の手動読み上げ
 - キャラ返答の自動読み上げON/OFF
+- 読み上げ停止
+- 読み上げの重なり防止
+- 読み上げ用テキストの簡易整形
 - 読み上げ処理の非同期実行
-- `max_output_tokens` による出力上限設定
-- `verbosity` による返答の詳しさ設定
-- `response_style` による返答スタイル設定
-- LLM用プロンプト確認ウィンドウ
-- LLM用プロンプトのコピー
-- LLM設定確認ウィンドウ
-- LLM設定のコピー
-- LLM設定の再読み込み
-- キャラクター設定・メモリ・直近履歴・ユーザー入力を含むプロンプト作成
-- 返答テンプレートへのキャラ設定・メモリ情報の差し込み
-- 直近会話履歴を使った疑似文脈生成
 - チャット画面
 - キャラ・メモリ画面
 - 返答ルール編集画面
-- タブによる画面整理
 - 水色・青・白を基調にしたUIテーマ
-- カード風パネル
-- 青系ボタン
-- 返答ルール一覧表示
-- 返答ルールの追加
-- 返答ルールの編集
-- 返答ルールの削除
-- `reply_rules.json` への返答ルール保存
-- メモリ編集
-- `memory.json` へのメモリ保存
-- ユーザー発言からのメモリ自動更新
-- 会話履歴の表示
-- 会話履歴検索
-- 会話履歴削除
-- キャラ設定の再読み込み
-- メモリの再読み込み
-- キャラから話しかける会話スターター
-- Enterキーによる送信
-- Windows用の起動バッチファイル
+- Gitによるバージョン管理
 
 ## 使い方
 
@@ -91,8 +69,6 @@ APIキーはコードや設定ファイルには書かず、環境変数 `OPENAI
 ```powershell
 py -3.14 app.py
 ```
-
-または、Windowsでは `start_app.bat` をダブルクリックして起動できます。
 
 このプロジェクトでは、Pythonの実行は以下に統一しています。
 
@@ -114,12 +90,6 @@ OpenAI API連携を使う場合は、OpenAI SDKをインストールします。
 py -3.14 -m pip install openai
 ```
 
-確認する場合は以下を実行します。
-
-```powershell
-py -3.14 -m pip show openai
-```
-
 ## APIキーの設定
 
 OpenAI APIキーは、コードやJSONファイルには書きません。  
@@ -137,8 +107,6 @@ setx OPENAI_API_KEY "sk-ここに自分のAPIキー"
 py -3.14 -c "import os; print('OK' if os.getenv('OPENAI_API_KEY') else 'NG')"
 ```
 
-`OK` と表示されれば設定できています。
-
 ## 返答モード
 
 チャット画面で返答モードを切り替えられます。
@@ -146,36 +114,74 @@ py -3.14 -c "import os; print('OK' if os.getenv('OPENAI_API_KEY') else 'NG')"
 ```text
 rule
 - 従来のルールベース返答
-- reply_rules.json のキーワードに応じて返答する
 
 mock_llm
 - 疑似LLMモード
-- 実際のLLM APIは使わない
-- ルールベース返答に加えて、メモリ情報や直近会話履歴を組み合わせる
-- 将来のLLM連携を想定した仮の返答エンジン
 
 openai
 - OpenAI APIを使った返答モード
-- build_llm_prompt() で生成したプロンプトをAPIに渡す
-- APIキーは環境変数 OPENAI_API_KEY から読み込む
-- llm_settings.json の model に指定したモデルを使用する
-- v3.1以降では短めで音声化しやすい返答になるように調整
 ```
 
 ## 音声読み上げ
 
-v3.2では、Windows標準音声による読み上げ機能を追加しています。
+音声エンジンを切り替えられます。
 
 ```text
-自動読み上げ
-- ONにすると、キャラクター返答が生成されたあとに自動で読み上げる
+windows
+- Windows標準音声で読み上げる
+- 追加インストールなしで使いやすい
 
-最新返答を読み上げ
-- 最後に生成されたキャラクター返答を手動で読み上げる
+voicevox
+- VOICEVOX Engineで音声合成する
+- VOICEVOXを起動している場合に利用できる
 ```
 
-現在はWindows標準の `System.Speech.Synthesis.SpeechSynthesizer` をPowerShell経由で呼び出しています。  
-将来的には、VOICEVOXなどの音声合成エンジンに差し替える予定です。
+v3.4では、VOICEVOX Engineに対して以下の流れで音声を生成します。
+
+```text
+テキスト
+↓
+/audio_query
+↓
+音声合成用クエリ
+↓
+/synthesis
+↓
+WAV音声
+↓
+PowerShell経由で再生
+```
+
+## voice_settings.json
+
+ローカル用の音声設定です。GitHubには上げません。
+
+例：
+
+```json
+{
+  "engine": "windows",
+  "voicevox_base_url": "http://127.0.0.1:50021",
+  "voicevox_speaker": 3,
+  "notes": "Local voice settings. engine can be windows or voicevox."
+}
+```
+
+各項目の意味は以下の通りです。
+
+```text
+engine
+- windows / voicevox のどちらを標準音声エンジンにするか
+
+voicevox_base_url
+- VOICEVOX EngineのURL
+
+voicevox_speaker
+- VOICEVOXの話者ID
+
+notes
+- 設定に関するメモ
+```
 
 ## LLM設定ファイル
 
@@ -199,75 +205,6 @@ v3.2では、Windows標準音声による読み上げ機能を追加していま
 }
 ```
 
-各項目の意味は以下の通りです。
-
-```text
-provider
-- mock / openai / local など、将来の接続先を表す
-
-model
-- 使用するモデル名
-
-reply_engine
-- 使用する返答エンジン
-
-max_recent_messages
-- プロンプトに入れる直近会話履歴の件数
-
-use_memory
-- memory.json の内容をプロンプトに含めるか
-
-use_chat_history
-- 直近会話履歴をプロンプトに含めるか
-
-temperature
-- 将来LLM APIに渡す生成のランダム性設定
-
-max_output_tokens
-- OpenAI APIから返ってくる出力の最大トークン数
-
-verbosity
-- 返答の詳しさ。low / medium / high を想定
-
-response_style
-- 返答スタイル。short_voice_friendly を標準にしている
-
-notes
-- 設定に関するメモ
-```
-
-`llm_settings.json` は個人用設定としてGitHubには上げません。  
-代わりに `llm_settings.example.json` をGit管理し、設定例として公開します。
-
-## LLM用プロンプト生成
-
-将来LLM APIに渡すためのプロンプトを生成できます。
-
-プロンプトには以下の情報を含めます。
-
-```text
-- LLM設定
-- キャラクター名
-- 一人称
-- ユーザーの呼び方
-- 関係性
-- 性格
-- 話し方
-- 支援スタイル
-- 避けるべき話し方
-- ユーザーメモリ
-- 現在の目標
-- 最近の進捗
-- 好きな話題
-- メモ
-- 直近の会話履歴
-- 今回のユーザー入力
-- 応答方針
-```
-
-チャット画面の「LLMプロンプト確認」ボタンを押すと、現在の入力欄の内容をもとにプロンプト確認ウィンドウが開きます。  
-生成されたプロンプトはコピーできます。
-
 ## 返答エンジン設計
 
 返答生成の入口を `generate_reply()` に集約しています。
@@ -279,89 +216,22 @@ generate_reply()
 ↓
 返答モードを確認
 ↓
-rule の場合：generate_rule_based_reply()
-mock_llm の場合：generate_mock_llm_reply()
-openai の場合：generate_openai_reply()
+rule / mock_llm / openai
 ↓
 キャラ返答を生成
 ```
 
-OpenAI API連携は `generate_openai_reply()` に分離しており、将来的にローカルLLMやRAG連携を追加する場合も、同じ構成で拡張できます。
+音声読み上げは `speak_text_async()` に分離しています。  
+v3.4では、その中で `windows` / `voicevox` の音声エンジンを切り替えます。
 
-音声読み上げも `speak_text_async()` に分離しており、将来的にVOICEVOXなどへ差し替えやすい構成にしています。
-
-## v3.2の改善点
-
-v3.2では、音声読み上げ機能の土台を追加しました。
+## v3.4の改善点
 
 ```text
-- 最新キャラ返答の手動読み上げ
-- 自動読み上げON/OFF
-- Windows標準音声による読み上げ
-- 読み上げ処理の非同期実行
-- 将来のVOICEVOX連携を見据えた関数分離
-```
-
-これにより、今後のキャラクター音声返答機能に進むための土台を整えています。
-
-## 画面構成
-
-以下の3つのタブに画面を分けています。
-
-```text
-チャット
-- 会話
-- 返答モード切り替え
-- 自動読み上げON/OFF
-- 最新返答を読み上げ
-- LLMプロンプト確認
-- LLM設定確認
-- 履歴検索
-- メッセージ送信
-- キャラから話しかける
-
-キャラ・メモリ
-- キャラ設定の確認
-- メモリの確認
-- メモリ編集
-- 会話履歴削除
-
-返答ルール編集
-- 返答ルール一覧
-- 返答ルール追加
-- 返答ルール編集
-- 返答ルール削除
-- reply_rules.json への保存
-```
-
-## UIデザイン
-
-v1.6以降では、以下のようにUIを改善しています。
-
-```text
-- 水色・青・白を基調にした配色
-- カード風パネル
-- 青系の主要ボタン
-- 淡い水色の背景
-- 読みやすい入力欄
-- タブUIの見た目調整
-- 危険操作用の赤系ボタン
-```
-
-## メモリ機能
-
-`memory.json` には、ユーザーに関する簡単な情報を保存します。
-
-例：
-
-```json
-{
-  "user_name": "ふぁるるくん",
-  "current_goal": "Character Chat Appを本格的な相棒アプリに育てる",
-  "recent_progress": "Python/Tkinterで複数の小さなデスクトップアプリを作成した",
-  "favorite_topics": "開発、研究、英会話、音声対話、RAG",
-  "notes": "一気に完璧を目指さず、小さい機能追加を積み上げる。"
-}
+- 音声エンジン切り替えUIを追加
+- VOICEVOX Engine連携処理を追加
+- VOICEVOX接続確認ボタンを追加
+- voice_settings.json / voice_settings.example.json を追加
+- Windows標準音声とVOICEVOXを切り替え可能にした
 ```
 
 ## 使用技術
@@ -376,7 +246,9 @@ v1.6以降では、以下のようにUIを改善しています。
 - threading
 - subprocess
 - tempfile
+- urllib
 - Windows System.Speech
+- VOICEVOX Engine API
 - OpenAI API
 - openai Python SDK
 
@@ -390,80 +262,27 @@ character-chat-app/
 ├─ start_app.bat
 ├─ reply_rules.json
 ├─ llm_settings.example.json
+├─ voice_settings.example.json
 ├─ character_profile.json
 ├─ chat_history.json
 ├─ memory.json
 ├─ llm_settings.json
+├─ voice_settings.json
 └─ openai_test.py
 ```
 
-`character_profile.json`、`chat_history.json`、`memory.json`、`llm_settings.json`、`openai_test.py` は個人用・ローカル用データのため、Git管理からは除外しています。
-
-`reply_rules.json` と `llm_settings.example.json` はGit管理します。
-
-## Git管理しないファイル
-
-以下は `.gitignore` に入れています。
-
-```text
-character_profile.json
-chat_history.json
-memory.json
-llm_settings.json
-openai_test.py
-```
-
-特に `OPENAI_API_KEY` は、コード・README・JSONファイルには絶対に書かず、環境変数から読み込みます。
+`character_profile.json`、`chat_history.json`、`memory.json`、`llm_settings.json`、`voice_settings.json`、`openai_test.py` は個人用・ローカル用データのため、Git管理からは除外しています。
 
 ## バージョン
 
-v3.2
-
-## 開発で学んだこと
-
-- TkinterによるチャットUI作成
-- ttk.NotebookによるタブUI
-- TkinterでのUIテーマ調整
-- JSONファイルの読み込み
-- キャラ設定データの利用
-- 返答ルールの外部JSON化
-- 返答ルール編集UI
-- メモリ情報の保存と読み込み
-- ユーザー発言からの簡易情報抽出
-- メモリ情報の自動更新
-- 返答テンプレートへの変数埋め込み
-- 会話履歴の保存
-- 会話履歴検索
-- ルールベース応答
-- 返答エンジンの分離
-- 返答モード切り替え
-- 疑似LLMモードの設計
-- LLM用プロンプト生成
-- LLM設定ファイルの分離
-- サンプル設定ファイルの作成
-- API連携に向けた安全な設定管理
-- OpenAI APIの接続
-- 環境変数によるAPIキー管理
-- OpenAI SDKによるResponses API呼び出し
-- LLM返答モードの追加
-- OpenAI返答の品質改善
-- 音声読み上げを見据えた返答設計
-- max_output_tokens による出力制御
-- verbosity / response_style による返答調整
-- Windows標準音声による読み上げ
-- 非同期処理によるUI停止の回避
-- 将来の音声エンジン差し替えを見据えた関数設計
-- Gitによるコミット管理
+v3.4
 
 ## 今後追加したい機能
 
-- VOICEVOX連携
+- VOICEVOX話者選択UI
 - 読み上げ音声の声質改善
-- 自動音声返答の細かい設定
-- ローカルLLM連携
+- 立ち絵・キャラクターUI
 - 会話履歴の要約
-- メモリ自動更新ルールの強化
 - RAG連携
 - 実行ファイル化
-- 立ち絵・キャラクターUI
 - READMEへのスクリーンショット追加

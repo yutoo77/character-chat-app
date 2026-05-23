@@ -1,0 +1,6 @@
+{
+  "engine": "windows",
+  "voicevox_base_url": "http://127.0.0.1:50021",
+  "voicevox_speaker": 3,
+  "notes": "Local voice settings. engine can be windows or voicevox. Copy this file to voice_settings.json for local use."
+}
